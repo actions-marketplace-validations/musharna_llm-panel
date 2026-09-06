@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **README rewritten for a first visitor**, from an independent critique: what the tool is
+  for in one line, install and a one-judge first run at the top, the rebuttal screenshot as
+  the hero, a cited table beside CodeRabbit, PR-Agent and Copilot code review, and the
+  benchmark sections cut to their two tables — the reading of them moved to
+  `recall/README.md` (new, the planted corpus) and `recall/benchmarks/README.md`.
+- `panel-report`: the bench subtitle said "one judge per vendor is the point", the
+  opposite of the README's evidence (Kohli 2026); it now says family is display metadata,
+  not policy (control 43.1). `docs/report.png` re-rendered from the same cline run.
+
 ## 0.1.6 — 2026-09-06
 
 - **A GitHub Action.** `uses: musharna/llm-panel@v0.1.6` with an OpenRouter key builds a

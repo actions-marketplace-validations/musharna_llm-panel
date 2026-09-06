@@ -37,6 +37,34 @@ running. The three prompt styles are `aacr-upstream --prompt-style {defect,broad
   filters treat a missing path or line as match-everything, and passing them through
   inflated line matches from 20 to 50 on the first scoring run.
 
+## Prompt styles, and the paper's baselines
+
+The README keeps the two tables; this is the reading of them.
+
+`broad` — asking for what a careful maintainer would actually raise — doubles the recall
+of the `defect` arm it was paired against (McNemar on paired references, p = 0.0005; that
+arm was the pre-rewrite prompt at 12.2%, not the row above). But the `volume` control
+shows what that class of gain is made of: it is the `defect` prompt plus one
+exhaustiveness clause, reaches the same recall (p = 1.0 vs broad), and pays for it with
+half of broad's precision. On a 35-PR replication the ordering holds on both transports
+while every arm's precision falls (broad ~9.7%, volume ~5.5–6.1%, ~16–18 findings read
+per hit). A declared cost cut over all of it settled the product default: **it stays
+`defect`**; the only candidate for a future default change is `broad`
+(`recall/benchmarks/cost-cut/README.md`).
+
+
+The rows are **not directly comparable** and the gap should be read with that in mind:
+ours is an 18-PR subsample, scored by upstream's evaluator code with `claude-opus-4.5` as
+the judge where the paper used Qwen3-235B, without the PR title and description, at line
+tolerance k = 1 where the paper says only "overlaps", and it is a three-judge panel of one
+subscription model and two free-tier ones where every paper row is a single frontier
+model. The paper's agentic condition (Claude Code with repository access) scores 10.1%
+recall at 39.9% precision, so the paper itself shows recall and precision trading against
+each other by an order of magnitude across conditions. What can be said: the `defect`
+prompt sits at the low-recall end of that spread, `broad` sits inside the paper's
+no-context recall range at better-than-paper precision, and nothing here has been measured
+on the full 200.
+
 ## Run ledgers
 
 Each directory's README is the ledger for that run: what was declared before it, what

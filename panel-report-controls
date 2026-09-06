@@ -1776,6 +1776,17 @@ with section("42.5 two-letter reviewers (AA, AB) past 26 judges"):
           pr.decode_letters("<p>as Reviewer AA said</p>", _L), True)
 
 
+# --- 43. the bench subtitle contradicted the README -----------------------------------
+# The page said "One judge per vendor is the point" under the bench; the README's
+# "Picking judges" says family is display metadata, not policy (Kohli 2026: one-per-family
+# made effective independence worse). A first-visitor critique of the README caught the
+# screenshot arguing against the text beneath it.
+_h43 = pr.build(pr.load_run(_USER_RUN), _O42)
+check("43.1 bench subtitle no longer claims one-per-vendor", "per vendor" in _h43, False)
+check("43.1 bench subtitle says family is metadata, not policy",
+      "display metadata, not policy" in _h43, True)
+
+
 print(f"\nFAILED ({len(FAILED)} of {COUNT} failing)" if FAILED else f"\nall {COUNT} controls green")
 for f in FAILED:
     print("  -", f)

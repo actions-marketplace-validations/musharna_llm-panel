@@ -1393,7 +1393,7 @@ footer{{margin-top:52px;padding-top:16px;border-top:1px solid var(--rule);
 {images}
 
 <h2 class="sec">The bench</h2>
-<p class="sub">One judge per vendor is the point: a panel drawn from one family shares its blind spots.</p>
+<p class="sub">Family is display metadata, not policy: vendor labels are a weak proxy for independent opinions. Pick judges by what they find on your code.</p>
 <div class="tw"><table><thead><tr><th>judge</th><th>family</th><th>model</th><th>status</th>
 <th>time</th><th>tokens</th><th>cost</th><th>cited</th><th>round 2</th></tr></thead><tbody>{bench}</tbody></table></div>
 

@@ -48,7 +48,8 @@ reported as `harness`, the other three upheld 7 findings, rejected 4, and missed
 
 ![rebuttal round: positions grouped by the finding being argued about](https://raw.githubusercontent.com/musharna/llm-panel/main/docs/rebuttal.png)
 
-**Contents:** [What's here](#whats-here) · [Install](#install) ·
+**Contents:** [What's here](#whats-here) · [Beside the review bots](#beside-the-review-bots) ·
+[Install](#install) ·
 [Configure your roster](#configure-your-roster) · [Using it](#using-it) ·
 [What it actually catches](#what-it-actually-catches) ·
 [On real PRs](#on-real-prs-aacr-bench) · [Tests](#tests) ·
@@ -70,7 +71,22 @@ reported as `harness`, the other three upheld 7 findings, rejected 4, and missed
 | `recall/aacr-upstream` | runs the panel over AACR-Bench PRs and hands the findings to **upstream's** evaluator  |
 | `recall/aacr-score`    | invokes that evaluator, and refuses to report a number from a judge that isn't running |
 | `claimlib.py`          | the one measurement boundary: reviews → span-grounded observations                     |
-| `*-controls`           | the regression suites — 1089 controls, every one tied to a defect that shipped         |
+| `*-controls`           | the regression suites — 1091 controls, every one tied to a defect that shipped         |
+
+## Beside the review bots
+
+| | models per review | what you read | published accuracy | runs as | keys |
+| --- | --- | --- | --- | --- | --- |
+| **llm-panel** | N, independent, blind to each other; rebuttal round | every answer verbatim, grouped by finding | measured on AACR-Bench, low and [reproducible](#on-real-prs-aacr-bench) | CLI, GitHub Action | yours (subscriptions or API keys) |
+| [CodeRabbit](https://www.coderabbit.ai/pricing) | several, in a [pipeline by stage](https://www.coderabbit.ai/blog/behind-the-curtain-what-it-really-takes-to-bring-a-new-model-online-at-coderabbit) | filtered by a verification agent | [vendor-reported](https://www.coderabbit.ai/blog/coderabbit-tops-martian-code-review-benchmark) on Martian's bench | GitHub/GitLab app, CLI, IDE | hosted, [no model choice](https://www.coderabbit.ai/blog/why-users-shouldnt-choose-their-own-llm-models-choice-is-not-always-good) |
+| [Qodo PR-Agent](https://github.com/qodo-ai/pr-agent) (MIT) | one model per call, fallback on failure | structured summary, [3 findings by default](https://raw.githubusercontent.com/The-PR-Agent/pr-agent/main/pr_agent/settings/configuration.toml) | none for the OSS tool | GitHub Action, CLI, Docker | yours |
+| [Copilot code review](https://docs.github.com/en/copilot/concepts/code-review/code-review) | "a mix of models", not switchable | filtered, severity-labelled | none stated | github.com, `gh`, IDE | hosted |
+
+The difference is not that the panel is better — on the numbers above it is not — but that
+it shows you everything the models said and tells you how much they miss. A filter that
+"validates each suggestion" is one more opinion, and the one most likely to drop a minority
+finding. Verified 2026-09-06 from each vendor's own pages; the smaller open-source
+council-style reviewers found had under 50 stars, and none publish a miss rate.
 
 ## Install
 
@@ -277,62 +293,24 @@ it" is a measurement rather than an impression.
 > lower bound on an easy corpus — not an estimate of real-world code-review capability.
 > 95% CI 76.6–97.9%, and that is before accounting for defects clustering within fixtures.
 
-**Read that next to a real-world number.** [CR-Bench](https://arxiv.org/html/2603.11078v1)
-(Nutanix, 2026) builds review tasks from _real_ bugs `git blame`d out of merged PRs in
-django, sympy, astropy and scikit-learn, and reports GPT-5.2 + Reflexion at **32.8% recall
-and 5.1% precision**. The gap between that and 25/27 is the corpus, not the panel: hand-
-planted single-mechanism defects in ~40-line files are far easier than real defects in
-mature codebases, and the two numbers are not even the same estimand — different agents,
-different context, different definitions of a hit.
-
-So this corpus is a **development instrument**, good for controlled A/Bs where ground truth
-must be known and iteration must be cheap (the abstention experiment below is exactly that).
-It is not evidence of absolute capability, and no number from it should be quoted as one.
-
-Three results worth knowing before you trust any of the output:
-
-- **Recall was limited by the roster, not by the models.** The two defects that panel
-  never found — a `.get(k, default)` that doesn't apply to an explicit `null`, and a
-  corrupt cache file silently becoming empty — are both found by a **six-vendor** panel
-  (OpenAI / NVIDIA / Zhipu / Moonshot / DeepSeek / xAI): 4/6 → **6/6** on those two
-  fixtures. The best two judges there, at 4/6 each, beat codex at 2/6 — and both were
-  broken or out of credit until the roster was repaired. If your panel is missing things,
-  check who is actually answering before concluding the models can't see it.
-- **Running the same model twice recovered nothing.** First passes 25/27, with repeats
-  25/27. The repeat-passes idea is well supported in the literature and did not reproduce
-  here. An earlier grader bug reported +1 and it was an artifact. Adding a _different
-  vendor_ did what adding a second pass of the same one could not.
-- **Letting judges say "nothing is wrong here" is a precision/recall trade, not a free
-  win either way.** One sentence of abstention licence is the whole difference.
-
-  |             | findings/fixture | false positives       |
-  | ----------- | ---------------- | --------------------- |
-  | licence on  | 0.42             | 0 / 6 judges          |
-  | licence off | 2.17             | 2, from 1 of 5 judges |
-
-  Findings-per-fixture is measured on fixtures that _do_ contain defects, where the extra
-  findings were verified **true** — so the licence suppresses real findings (one judge went
-  3.00 → 0.00 on files with genuine defects). False positives are measured on
-  `p01-exhaustive-codec`, the one fixture with **proven** absence rather than verified
-  scope — which is what makes a false-positive rate computable at all. There, the same
-  judge on the same code abstained with the licence and produced two demonstrably false
-  findings without it (it claimed int and str subclasses were rejected; `encode(MyInt(1))`
-  returns `'A'`).
-
-  So: the licence costs true findings and prevents false ones. Which you want depends on
-  whether chasing a false lead costs you more than missing a real defect. Caveat worth
-  stating: one proven fixture, eleven reviews.
+Hand-planted single-mechanism defects in ~40-line files are far easier than real defects
+in mature codebases ([CR-Bench](https://arxiv.org/html/2603.11078v1) reports GPT-5.2 +
+Reflexion at 32.8% recall on `git blame`d real bugs), so this corpus is a **development
+instrument** for controlled A/Bs, not evidence of capability. Three things it did settle —
+the two misses were the roster's fault, not the models' (a six-vendor panel found both);
+running the same model twice recovered nothing where adding a different vendor did; and
+one sentence of abstention licence trades real findings for zero false positives — are
+written up with their numbers in
+[`recall/README.md`](https://github.com/musharna/llm-panel/blob/main/recall/README.md).
 
 ## On real PRs (AACR-Bench)
 
-The planted corpus above is a development instrument; the real-world numbers come from
-running the panel over [AACR-Bench](https://github.com/alibaba/aacr-bench) PRs and
-scoring the findings with **upstream's own evaluator** — a real LLM judge doing
-path → line → semantic matching, so the numbers are theirs, not a self-graded matcher's.
-The prompt style is a flag of that harness, `recall/aacr-upstream --prompt-style`, not of
-`llm-panel`. On 18 PRs at full roster. The default row is the shipped prompt measured at
-`e2ad666` (2026-09-06, `recall/benchmarks/results-0.1.4-3judge/`); the other two are
-extractor-3 re-measurements from 2026-08-28:
+The real-world numbers come from running the panel over
+[AACR-Bench](https://github.com/alibaba/aacr-bench) PRs and scoring the findings with
+**upstream's own evaluator** — an LLM judge doing path → line → semantic matching, so the
+numbers are theirs, not a self-graded matcher's. 18 PRs, full roster, three prompt styles
+(`recall/aacr-upstream --prompt-style`). The default row is the shipped prompt measured at
+`e2ad666` (2026-09-06); the other two are re-measurements from 2026-08-28:
 
 | `--prompt-style`   | semantic recall | precision | findings read per validated hit |
 | ------------------ | --------------- | --------- | ------------------------------- |
@@ -345,22 +323,15 @@ extractor-3 re-measurements from 2026-08-28:
   <img alt="recall against precision for the three prompt styles; error bars are the ±2 pp re-run noise floor" src="https://raw.githubusercontent.com/musharna/llm-panel/main/docs/bench-light.png" width="660">
 </picture>
 
-`broad` — asking for what a careful maintainer would actually raise — doubles the recall
-of the `defect` arm it was paired against (McNemar on paired references, p = 0.0005; that
-arm was the pre-rewrite prompt at 12.2%, not the row above). But the `volume` control
-shows what that class of gain is made of: it is the `defect` prompt plus one
-exhaustiveness clause, reaches the same recall (p = 1.0 vs broad), and pays for it with
-half of broad's precision. On a 35-PR replication the ordering holds on both transports
-while every arm's precision falls (broad ~9.7%, volume ~5.5–6.1%, ~16–18 findings read
-per hit). A declared cost cut over all of it settled the product default: **it stays
-`defect`**; the only candidate for a future default change is `broad`
-(`recall/benchmarks/cost-cut/README.md`).
+`broad` doubles `defect`'s recall (McNemar p = 0.0005) for 25% more reading per validated
+hit; `volume` reaches the same recall by verbosity alone and halves precision. A declared
+cost cut kept `defect` as the default for its precision and names `broad` the only
+candidate for a future change (`recall/benchmarks/cost-cut/README.md`).
 
 **Against the paper's own baselines, the panel's precision is ordinary and its recall is
-low.** [AACR-Bench's Table 3](https://arxiv.org/abs/2601.19494) (v3, 2026-01-30) reports
-single models on all 200 PRs under a "No context" condition — the diff plus the PR title
-and description, no retrieved repository code — which is the closest published condition
-to the diff-in-prompt arm above:
+low.** [AACR-Bench's Table 3](https://arxiv.org/abs/2601.19494) (v3, 2026-01-30), single
+models on all 200 PRs, "No context" — the diff plus title and description, no repository
+code — is the closest published condition to the diff-in-prompt arm above:
 
 | paper, "No context", all 200 PRs | recall | precision |
 | -------------------------------- | ------ | --------- |
@@ -372,35 +343,16 @@ to the diff-in-prompt arm above:
 | this panel, `defect`, 18 PRs     | 9.8%   | 9.5%      |
 | this panel, `broad`, 18 PRs      | 26.0%  | 13.2%     |
 
-The rows are **not directly comparable** and the gap should be read with that in mind:
-ours is an 18-PR subsample, scored by upstream's evaluator code with `claude-opus-4.5` as
-the judge where the paper used Qwen3-235B, without the PR title and description, at line
-tolerance k = 1 where the paper says only "overlaps", and it is a three-judge panel of one
-subscription model and two free-tier ones where every paper row is a single frontier
-model. The paper's agentic condition (Claude Code with repository access) scores 10.1%
-recall at 39.9% precision, so the paper itself shows recall and precision trading against
-each other by an order of magnitude across conditions. What can be said: the `defect`
-prompt sits at the low-recall end of that spread, `broad` sits inside the paper's
-no-context recall range at better-than-paper precision, and nothing here has been measured
-on the full 200.
-
-Three things to know before quoting any of it:
-
-- **The variance floor is measured.** Re-running the same judge on the same 35 PRs moves
-  up to ±3 human-reference matches of 150, with an evaluator replicate at exactly zero —
-  so effects under ~5–7 pp of recall are re-run noise at this n, which every subgroup
-  claim so far was.
-- **Three earlier readings were withdrawn on re-measurement** — a DEFECT/IMPROVEMENT
-  split (the classifier was circular), "broad finds different hits" (pre-registered
-  replication on 35 fresh PRs, p = 0.40), and a transport effect that did not survive a
-  re-run. Nothing above rests on a withdrawn claim.
-- **Location agreement overstates semantic agreement ~2.5x** (25.2% of references had a
-  finding at the right file and line; 9.8% had one a judge called the same concern) —
-  which is why scoring is delegated upstream instead of done by a local matcher.
-
-The rest — the repo-checkout arm, what a degraded roster costs, accepted-vs-rejected
-comments, why unlocated findings are withheld from upstream — with every run ledger and
-the data licensing, is in
+The rows are **not directly comparable**: ours is an 18-PR subsample scored with a
+different judge model, without the PR title and description, and it is one subscription
+model plus two free-tier ones against single frontier models. What can be said: `defect`
+sits at the low-recall end of that spread, `broad` sits inside the paper's recall range at
+better-than-paper precision, and nothing here has been measured on the full 200. The
+variance floor is measured (effects under ~5–7 pp are re-run noise at this n), three
+earlier readings were withdrawn on re-measurement and nothing above rests on one, and
+location agreement overstates semantic agreement ~2.5x — which is why scoring is
+delegated upstream. The full comparability caveats, every run ledger and the data
+licensing are in
 [`recall/benchmarks/README.md`](https://github.com/musharna/llm-panel/blob/main/recall/benchmarks/README.md).
 
 ## Tests
