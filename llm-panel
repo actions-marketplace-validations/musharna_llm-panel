@@ -1032,6 +1032,8 @@ exit codes:
   10  --thread: another run holds this thread's lock
   11  --repeat out of range        12  a repeat suffix was supplied by hand
   13  illegal judge name (names become file paths)
+  14  none of the selected judges has its CLI installed (the message says where the
+      roster goes and how to ping it)
   130 interrupted (Ctrl-C or SIGTERM); what had landed is in the run directory"""
 # What THIS process wrote. Cleanup used to glob `material-*.md` and unlink every match, so a
 # finishing run deleted a CONCURRENT run's file -- and that run's judges, each holding a 2 KB
@@ -1292,7 +1294,7 @@ def _ask(name, prompt, repo, timeout, agent="panelist", session_file=None,
                     # `answered`, so a spent quota can never read as a judge who reviewed
                     # and found nothing. Reusing it beats inventing a parallel category.
                     return result(name, "unavailable",
-                                  f"codex usage limit reached"
+                                  "codex usage limit reached"
                                   + (f" -- resets {reset}" if reset else "")
                                   + f". Provider said: {said}", time.time() - t0,
                                   {"limit": True, "reset_hint": reset, "provider_said": said})
@@ -2702,6 +2704,7 @@ def codex_rpc(calls, timeout=45):
     method_of = {r["id"]: r["method"] for r in reqs if "id" in r}
     got = {}
     deadline = time.time() + timeout
+    answered = threading.Event()     # before the try: its finally sets this on every path
     try:
         for r in reqs:
             p.stdin.write(json.dumps(r) + "\n")
@@ -2713,7 +2716,6 @@ def codex_rpc(calls, timeout=45):
         # `if p.poll() is None` then did nothing while `for line in p.stdout` blocked for
         # as long as the orphan lived. The group id outlives the launcher, so the kill
         # still reaches the child. Found by astra, 2026-09-06.
-        answered = threading.Event()
         def _reap():
             if not answered.wait(max(0.0, deadline - time.time())):
                 try:
@@ -3235,11 +3237,23 @@ def main():
     # cancelled the whole panel before Codex was ever asked -- and ollama judges
     # were refused for want of a CLI this program no longer uses (it speaks HTTP).
     # ask() reports a missing transport as that judge's `harness` failure instead.
-    for j in judges:
-        kind = ROSTER[j][0]
-        if kind in BINARY and not shutil.which(BINARY[kind]):
-            sys.stderr.write(f"llm-panel: `{BINARY[kind]}` is not on PATH, so {j} will "
-                             f"report a transport failure; the other judges still run\n")
+    _dead = [j for j in judges
+             if ROSTER[j][0] in BINARY and not shutil.which(BINARY[ROSTER[j][0]])]
+    if _dead and len(_dead) == len(judges):
+        # A fresh install with the shipped roster used to print three of the warnings
+        # below and then exit 9 about an opencode agent definition -- for a CLI that was
+        # not installed. The roster names one person's accounts; the first thing a new
+        # user needs is where to name their own, and it was nowhere in the output.
+        _need = sorted({BINARY[ROSTER[j][0]] for j in _dead})
+        die("none of the selected judges can run here:\n  - "
+            + "\n  - ".join(f"`{b}` is not on PATH: {INSTALL_HINT[b]}" for b in _need)
+            + f"\nThe shipped roster names the author's accounts. To name yours, copy "
+              f"roster.example.json (https://github.com/musharna/llm-panel/blob/main/"
+              f"roster.example.json) to {CONFIG_PATH} and run `llm-panel --check`, which "
+              f"pings every judge in it and says who answered.", 14)
+    for j in _dead:
+        sys.stderr.write(f"llm-panel: `{BINARY[ROSTER[j][0]]}` is not on PATH, so {j} will "
+                         f"report a transport failure; the other judges still run\n")
 
     enforce_trust(judges, a.synthesize, repo, a.agent, a.unsafe_agent)
 

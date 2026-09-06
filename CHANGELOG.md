@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- **A GitHub Action.** `uses: musharna/llm-panel@<tag>` with an OpenRouter key builds a
+  prompt from the pull request's diff, runs the panel in the checked-out tree and posts
+  every answer in full as one comment, edited on each push. Exit 9 (the PR's tree carries
+  configuration the judges would run) fails the job; 0 and 4 post. This repository runs it
+  on its own pull requests, installed from source.
+- **The README puts the paper's baselines next to ours.** AACR-Bench's Table 3, "No
+  context", all 200 PRs: single frontier models score 27–47% recall at 6–11% precision.
+  The `defect` panel's 9.8% / 9.5% on 18 PRs is at the low-recall end of that spread and
+  `broad` is inside it; the rows are not directly comparable and the paragraph says
+  exactly how they differ.
+- **A first run with none of the author's tools is one sentence, not three warnings and
+  a refusal about an opencode agent.** When no selected judge has its CLI installed the
+  panel exits 14, names each missing binary with its install hint, and says where
+  `roster.json` goes and that `llm-panel --check` pings whoever is in it.
+- `panel-report`: a review taller than its box now says "scrolls ↓" at the fold until the
+  reader reaches the end — with overlay scrollbars a review cut mid-sentence under a
+  footer promising "reproduced in full" read as truncation; and "no positions" in the
+  round-two column is grey, not the red of a failure. Both from an independent look at
+  the rendered page. Three lint leftovers gone.
+
 ## 0.1.5 — 2026-09-06
 
 The release that was going to be documentation only became a defect release the same

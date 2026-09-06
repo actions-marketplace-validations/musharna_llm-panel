@@ -58,7 +58,7 @@ citation-overlap tables show where the panel's attention landed (three judges re
 | `recall/aacr-upstream` | runs the panel over AACR-Bench PRs and hands the findings to **upstream's** evaluator  |
 | `recall/aacr-score`    | invokes that evaluator, and refuses to report a number from a judge that isn't running |
 | `claimlib.py`          | the one measurement boundary: reviews → span-grounded observations                     |
-| `*-controls`           | the regression suites — 1082 controls, every one tied to a defect that shipped         |
+| `*-controls`           | the regression suites — 1088 controls, every one tied to a defect that shipped         |
 
 ## Install
 
@@ -198,6 +198,33 @@ spots. Add it explicitly when that isn't the case — it is strong.
   `codex app-server`, the same channel the interactive `/status` screen uses, and cost
   no quota themselves.
 
+### On pull requests
+
+The repository doubles as a GitHub Action. It builds a prompt from the PR's diff, runs the
+panel in the checked-out tree, and posts every judge's answer in full as one comment,
+edited in place on each push rather than added to:
+
+```yaml
+# .github/workflows/panel.yml
+on: pull_request
+permissions: { contents: read, pull-requests: write }
+jobs:
+  panel:
+    if: github.event.pull_request.head.repo.full_name == github.repository # forks have no secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: musharna/llm-panel@v0.1.6
+        with:
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          # judges: or-glm,or-kimi,or-deepseek   timeout: "600"   extra-args: --rebut
+```
+
+The default judges are the three OpenRouter ones, so one key is the whole setup. The
+job fails on exit 9 — the PR's tree carries `.opencode/` or claude hooks the judges would
+run — and posts the panel on 0 or 4. This repository runs it on its own pull requests
+(`.github/workflows/panel.yml`, installing from source).
+
 Judges reading through `codex`/`opencode`/`claude` can **read your repo**. `ollama` judges
 answer from the prompt alone with no tool loop, so they cannot verify a claim against code.
 Treat their findings accordingly.
@@ -208,7 +235,8 @@ found a judge that could not answer at all · 4 degraded panel (a judge never ra
 failure, reported as such) · 7/8 `--diff` could not produce a diff / had nothing to review ·
 9 the opencode agent or the reviewed tree is not verified safe · 10 `--thread` is locked by
 another run · 11/12 `--repeat` out of range / a repeat suffix typed by hand · 13 illegal
-judge name · 130 interrupted (Ctrl-C or SIGTERM), with whatever landed kept in the run
+judge name · 14 none of the selected judges has its CLI installed, with the roster path in
+the message · 130 interrupted (Ctrl-C or SIGTERM), with whatever landed kept in the run
 directory.
 
 The rebuttal round as rendered — every position each judge took on each finding, grouped
@@ -307,6 +335,34 @@ while every arm's precision falls (broad ~9.7%, volume ~5.5–6.1%, ~16–18 fin
 per hit). A declared cost cut over all of it settled the product default: **it stays
 `defect`**; the only candidate for a future default change is `broad`
 (`recall/benchmarks/cost-cut/README.md`).
+
+**Against the paper's own baselines, the panel's precision is ordinary and its recall is
+low.** [AACR-Bench's Table 3](https://arxiv.org/abs/2601.19494) (v3, 2026-01-30) reports
+single models on all 200 PRs under a "No context" condition — the diff plus the PR title
+and description, no retrieved repository code — which is the closest published condition
+to the diff-in-prompt arm above:
+
+| paper, "No context", all 200 PRs | recall | precision |
+| -------------------------------- | ------ | --------- |
+| GPT-5.2                          | 47.1%  | 7.0%      |
+| Claude-4.5-Sonnet                | 42.9%  | 8.7%      |
+| DeepSeek-V3.2                    | 36.5%  | 5.6%      |
+| GLM-4.7                          | 27.6%  | 11.3%     |
+| Qwen-480B-Coder                  | 27.4%  | 9.4%      |
+| this panel, `defect`, 18 PRs     | 9.8%   | 9.5%      |
+| this panel, `broad`, 18 PRs      | 26.0%  | 13.2%     |
+
+The rows are **not directly comparable** and the gap should be read with that in mind:
+ours is an 18-PR subsample, scored by upstream's evaluator code with `claude-opus-4.5` as
+the judge where the paper used Qwen3-235B, without the PR title and description, at line
+tolerance k = 1 where the paper says only "overlaps", and it is a three-judge panel of one
+subscription model and two free-tier ones where every paper row is a single frontier
+model. The paper's agentic condition (Claude Code with repository access) scores 10.1%
+recall at 39.9% precision, so the paper itself shows recall and precision trading against
+each other by an order of magnitude across conditions. What can be said: the `defect`
+prompt sits at the low-recall end of that spread, `broad` sits inside the paper's
+no-context recall range at better-than-paper precision, and nothing here has been measured
+on the full 200.
 
 Three things to know before quoting any of it:
 
