@@ -411,6 +411,87 @@ with section("5.9 a PLAIN bullet that opens with path:line is a finding (extract
     check("5.9 a path in mid-sentence does not open a finding", len(obs3), 0)
 
 
+with section("5.10 a fragment belongs to the finding it followed in the SAME judge's review"):
+    # THE SHIPPED BUG: `obs` is ONE list pooled across judges (read_run -> to_upstream_result),
+    # and the merge rule looked only at out[-1]. Judge B's first observation whose path the
+    # diff denies was glued onto judge A's last finding: it took A's file:line and B's
+    # independently matchable claim vanished. A fragment can only belong to what preceded it
+    # in the same review; across a judge boundary there is no "finding above".
+    # Found by astra, 2026-09-06.
+    P = ns["diff_paths"](DIFF)
+    a = {"verbatim": "**`src/app/main.py:10`**: `x` is dereferenced unchecked\n",
+         "observation_id": "codex:1", "judge": "codex",
+         "location": {"path": "src/app/main.py", "line": 10}}
+    b = {"verbatim": "cleanup/shutdown fails in `src/b.py:20` when the pool is drained\n",
+         "observation_id": "nemotron:1", "judge": "nemotron",
+         "location": {"path": "src/b.py", "line": 20}}          # not in the diff
+    m = ns["merge_fragments"]([dict(a), dict(b)], P)
+    check("5.10 two judges, two findings", len(m), 2)
+    check("5.10 A's text is untouched", m[0]["verbatim"] if m else None, a["verbatim"])
+    check("5.10 B keeps its own claim and location",
+          (m[1]["verbatim"], m[1]["location"]["path"]) if len(m) > 1 else None,
+          (b["verbatim"], "src/b.py"))
+    check("5.10 nothing recorded as merged", [x.get("merged_from", []) for x in m], [[], []])
+    # POSITIVE CONTROL: the same two observations from ONE judge still merge -- the
+    # within-review rule of 5.1/5.3 is what this must not break.
+    same = [dict(a), dict(b, observation_id="codex:2", judge="codex")]
+    m1 = ns["merge_fragments"](same, P)
+    check("5.10 same judge: one finding", len(m1), 1)
+    check("5.10 same judge: provenance", m1[0].get("merged_from") if m1 else None, ["codex:2"])
+    # The header rule (5.7) has the same boundary: a bare header from judge A followed by
+    # judge B's body is A's dangling title plus B's finding, not one finding at A's location.
+    head = {"verbatim": "**File: `src/app/main.py` (lines 10-12)**\n",
+            "observation_id": "codex:h", "judge": "codex",
+            "location": {"path": "src/app/main.py", "line": 10}}
+    body = {"verbatim": "**File: `lib/util/main.py` (lines 5, 8)**\n\nThe header declares the "
+                        "function static; the implementation does not.\n",
+            "observation_id": "nemotron:b", "judge": "nemotron",
+            "location": {"path": "lib/util/main.py", "line": 5}}
+    mh = ns["merge_fragments"]([dict(head), dict(body)], P)
+    check("5.10 A's header does not swallow B's body", len(mh), 2)
+    check("5.10 B's body keeps B's location",
+          [x["location"]["path"] for x in mh], ["src/app/main.py", "lib/util/main.py"])
+    # POSITIVE CONTROL: A's header followed by A's body still merges forward (5.7).
+    mh1 = ns["merge_fragments"]([dict(head), dict(body, observation_id="codex:b", judge="codex")], P)
+    check("5.10 same judge: header merges into its body", len(mh1), 1)
+    check("5.10 same judge: keeps the declared location",
+          mh1[0]["location"] if mh1 else None, {"path": "src/app/main.py", "line": 10})
+
+
+with section("5.11 a header with no VALID location takes the BODY's location, not its own"):
+    # Exposed by fixing 5.10: a review that opens `## Defects Found` (nemotron), `## DEFECT`
+    # (big-pickle) or `**DEFECT 1: ...**` with no path used to have that header absorbed
+    # backward into the previous judge's last finding. Standing on its own it merges
+    # FORWARD (5.7), and `dict(head)` carried its EMPTY location over the body's real one,
+    # so the finding was withheld as unlocated -- it also bit any single-judge review that
+    # opened this way. Found by astra, 2026-09-06 (second order).
+    P = ns["diff_paths"](DIFF)
+    obs = [
+        {"verbatim": "## Defects Found\n\n", "observation_id": "n:0", "judge": "nemotron",
+         "location": {"path": None, "line": None}},
+        {"verbatim": "### 1. `src/app/main.py` (line 10)\n**Bug:** `x` is dereferenced\n",
+         "observation_id": "n:1", "judge": "nemotron",
+         "location": {"path": "src/app/main.py", "line": 10}},
+    ]
+    m = ns["merge_fragments"]([dict(o) for o in obs], P)
+    check("5.11 one finding", len(m), 1)
+    check("5.11 at the BODY's location", m[0]["location"] if m else None,
+          {"path": "src/app/main.py", "line": 10})
+    check("5.11 the header text travels with it", m[0]["verbatim"].startswith("## Defects Found") if m else None, True)
+    r = ns["to_upstream_result"]([dict(o) for o in obs], "/run", P, {})
+    check("5.11 and it is handed upstream, located", len(r["review"]["comments"]), 1)
+    # POSITIVE CONTROL: a header whose location the diff CONFIRMS still wins (5.7's rule).
+    ok_head = [
+        {"verbatim": "**File: `src/app/main.py` (lines 10-12)**\n", "observation_id": "h",
+         "judge": "codex", "location": {"path": "src/app/main.py", "line": 10}},
+        {"verbatim": "**File: `lib/util/main.py` (line 5)**\n\nstatic in header only.\n",
+         "observation_id": "b", "judge": "codex", "location": {"path": "lib/util/main.py", "line": 5}},
+    ]
+    mh = ns["merge_fragments"](ok_head, P)
+    check("5.11 a VALIDATED header location still wins",
+          (len(mh), mh[0]["location"] if mh else None), (1, {"path": "src/app/main.py", "line": 10}))
+
+
 # --- 7. the checkout arm: where the judges stand -------------------------------------------
 import subprocess  # noqa: E402
 
@@ -462,6 +543,79 @@ with section("7.2 the checkout sentence is the ONLY difference between the arms"
     check("7.2 checkout mode adds the sentence", ns["CHECKOUT_NOTE"] in withc, True)
     check("7.2 and nothing else", withc.replace(ns["CHECKOUT_NOTE"], ""), empty)
     check("7.2 both carry the diff", DIFF in empty and DIFF in withc, True)
+
+
+# --- 8. aacr-score: relative arguments mean the caller's directory -----------------------
+# aacr-score imports upstream's evaluation package at module level, so it cannot be exec'd
+# here the way aacr-upstream is. Two controls instead: the source order, and a real run of
+# the script under a temp $HOME holding a stub ~/aacr-bench/evaluation that records the
+# paths it was handed. Found by astra, 2026-09-06.
+SCORE = ROOT / "aacr-score"
+
+with section("8.1 SOURCE ORDER: argv paths are resolved BEFORE os.chdir(E)"):
+    # Shipped: `os.chdir(E)` at :30 ran ~50 lines before `pathlib.Path(sys.argv[1])` at :77,
+    # so `aacr-score results instances.jsonl scores` looked under ~/aacr-bench/evaluation.
+    text = SCORE.read_text()
+    i_chdir, i_argv = text.find("os.chdir(E)"), text.find("results, insts_path, out =")
+    check("8.1 both statements present", i_chdir > 0 and i_argv > 0, True)
+    check("8.1 argv is resolved before the chdir", i_argv < i_chdir, True)
+    line = text[i_argv:text.find("\n", i_argv)]
+    check("8.1 and resolved to absolute paths", ".resolve()" in line, True)
+
+def _score_run(args, home, cwd, witness):
+    import os
+    env = dict(os.environ, HOME=str(home), WITNESS=str(witness))
+    return subprocess.run([sys.executable, str(SCORE), *args], cwd=cwd, env=env,
+                          capture_output=True, text=True, timeout=120)
+
+with section("8.2 REAL EXECUTION: relative arguments resolve in the caller's cwd, not under E"):
+    home = pathlib.Path(tempfile.mkdtemp())
+    E = home / "aacr-bench" / "evaluation"; E.mkdir(parents=True)
+    # judge: not mock; the paraphrase probe passes, the unrelated-claims probe fails
+    (E / "judge.py").write_text(
+        "USE_MOCK_LLM = False\n"
+        "async def match_semantic(ref, gen):\n"
+        "    return {'is_similar': gen.startswith('this loop'), 'reason': 'stub'}\n")
+    (E / "schema.py").write_text(
+        "import json, os, pathlib\n"
+        "def load_instances(p):\n"
+        "    w = pathlib.Path(os.environ['WITNESS'])\n"
+        "    d = json.loads(w.read_text()) if w.is_file() else {}\n"
+        "    d['insts'] = str(pathlib.Path(p).resolve()); w.write_text(json.dumps(d))\n"
+        "    return []\n")
+    (E / "config.py").write_text("def result_path(results, iid): return results / iid\n")
+    (E / "evaluate.py").write_text(
+        "import json, os, pathlib\n"
+        "def judge_mode_description(): return 'stub'\n"
+        "async def evaluate(have, results, name, out, line_k=1):\n"
+        "    w = pathlib.Path(os.environ['WITNESS'])\n"
+        "    d = json.loads(w.read_text()) if w.is_file() else {}\n"
+        "    d['results'] = str(pathlib.Path(results).resolve())\n"
+        "    d['out'] = str(pathlib.Path(out).resolve()); d['line_k'] = line_k\n"
+        "    w.write_text(json.dumps(d)); return {}\n")
+    work = pathlib.Path(tempfile.mkdtemp())
+    (work / "results").mkdir(); (work / "instances.jsonl").write_text("")
+    wit = work / "witness.json"
+    r = _score_run(["results", "instances.jsonl", "scores", "3"], home, work, wit)
+    check("8.2 the script ran to completion", (r.returncode, r.stderr[-200:]), (0, ""))
+    got = json.loads(wit.read_text()) if wit.is_file() else None
+    check("8.2 relative paths mean the caller's directory",
+          got, {"insts": str(work / "instances.jsonl"), "results": str(work / "results"),
+                "out": str(work / "scores"), "line_k": 3})
+    # POSITIVE CONTROL: absolute arguments were never affected and still arrive intact.
+    wit2 = work / "witness2.json"
+    r2 = _score_run([str(work / "results"), str(work / "instances.jsonl"), str(work / "scores")],
+                    home, E, wit2)
+    got2 = json.loads(wit2.read_text()) if wit2.is_file() else None
+    check("8.2 absolute arguments arrive intact",
+          (r2.returncode, got2),
+          (0, {"insts": str(work / "instances.jsonl"), "results": str(work / "results"),
+               "out": str(work / "scores"), "line_k": 1}))
+    # NEGATIVE CONTROL for the harness: the stub judge's mock/dead-judge refusals are live,
+    # so a green 8.2 is not a script that skipped its guards.
+    (E / "judge.py").write_text("USE_MOCK_LLM = True\n")
+    r3 = _score_run(["results", "instances.jsonl", "scores"], home, work, work / "w3.json")
+    check("8.2 the mock-mode refusal still fires under the stub", r3.returncode, 1)
 
 
 print(f"\nFAILED ({len(FAILED)} of {COUNT} failing)" if FAILED else f"\nall {COUNT} controls green")

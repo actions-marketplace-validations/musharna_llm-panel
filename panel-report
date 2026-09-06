@@ -814,8 +814,14 @@ def load_run(d):
     if "synthesize" in (meta or {}):
         # run.json is authoritative: no synthesiser named means there is no synthesis,
         # whatever the prose says, and a DIFFERENT name means the prose is not it.
+        # LAST, not first: every review is embedded verbatim above the synthesis, so the
+        # first heading with the right name can be a judge's -- a review that wrote
+        # `## Synthesis (by \`codex\`)` on a run that asked codex to synthesise was
+        # displayed as the verdict. llm-panel appends the genuine synthesis after every
+        # review and the rebuttal round; the last heading is the one it wrote.
+        # Found by astra, 2026-09-06.
         if _who:
-            syn = next((m for m in _all_syn if m.group(1) == _who), None)
+            syn = next((m for m in reversed(_all_syn) if m.group(1) == _who), None)
     elif _all_syn:
         syn = next((m for m in reversed(_all_syn) if m.group(1) in roster), None)
     return {"dir": d, "source": source, "meta": meta, "judges": judges, "prompt": prompt,
@@ -838,11 +844,15 @@ def load_run(d):
 #   Reviewer A 2 / Reviewer A #2   explicit "Reviewer" prefix
 #   A #1 / A.1 / A. 1              an actual . or # separator
 #   A1                             adjacent, no separator needed
+# ONE OR TWO letters: llm-panel's `_letter` labels judges A..Z, AA, AB ... so a roster (or
+# --repeat) past 26 judges cites `AA1`, and a single-letter pattern dropped every one of
+# those into the ungrouped bucket. tags_of() admits a two-letter reviewer only when the
+# run's letters map names it -- see there. Found by astra, 2026-09-06.
 TAG_RE = re.compile(
     r"(?<![A-Za-z0-9])"
-    r"(?:Reviewer\s+(?P<rl>[A-Z])\s*[.#]?\s*(?P<rn>\d+[a-z]?)"
-    r"|(?P<sl>[A-Z])\s*[.#]\s*(?P<sn>\d+[a-z]?)"
-    r"|(?P<al>[A-Z])(?P<an>\d+[a-z]?))"
+    r"(?:Reviewer\s+(?P<rl>[A-Z]{1,2})\s*[.#]?\s*(?P<rn>\d+[a-z]?)"
+    r"|(?P<sl>[A-Z]{1,2})\s*[.#]\s*(?P<sn>\d+[a-z]?)"
+    r"|(?P<al>[A-Z]{1,2})(?P<an>\d+[a-z]?))"
     r"\b")
 
 
@@ -852,7 +862,14 @@ TAG_RE = re.compile(
 # is. Bound to TAG_RE here for the same reason the controls are: a second implementation of
 # a pattern is a second thing to forget. The spelled-out form is the LAST alternative so
 # "Reviewer A #2" is consumed by the tag branch and never annotated twice.
-DECODE_RE = re.compile(TAG_RE.pattern + r"|\bReviewer (?P<bare>[A-Z])\b")
+DECODE_RE = re.compile(TAG_RE.pattern + r"|\bReviewer (?P<bare>[A-Z]{1,2})\b")
+
+# The statuses under which a judge's review file holds an ANSWER. llm-panel's failure
+# classes -- `harness`, `refused`, `unavailable` -- write the error line into <name>.md in
+# place of the review, so "the file has text" is not "the judge answered". `incomplete`
+# is a cut-off answer and `unlisted` a metadata gap (recovered from disk); both are real
+# reviews. Three sites counted answers by this tuple and a fourth by text alone.
+ANSWERED_STATUS = ("ok", "incomplete", "unlisted")
 
 
 # Judge identity had NO visual anchor: with five judges spread over a bench, ~45 claim
@@ -940,6 +957,12 @@ def tags_of(s, letters=None):
         letter = m.group("rl") or m.group("sl") or m.group("al")
         num = m.group("rn") or m.group("sn") or m.group("an")
         if letters is not None and letter not in letters:
+            continue
+        # A two-letter reviewer exists only when the run assigned one (27+ judges), and
+        # then run.json's letters map names it. Without that map, `MD5` and `OK1` are
+        # two capitals and digits too -- prose, not a citation -- so a legacy run with
+        # no map keeps the single-letter rule rather than inventing findings.
+        if len(letter) == 2 and letters is None:
             continue
         tag = f"{letter}{num}"
         if tag not in out:
@@ -1089,7 +1112,7 @@ def attention_view(run):
     if not defined:
         return [], []
     answered = [j for j in run["judges"].values()
-                if j["status"] in ("ok", "incomplete", "unlisted") and (j.get("review") or "").strip()]
+                if j["status"] in ANSWERED_STATUS and (j.get("review") or "").strip()]
     answered.sort(key=lambda j: j["name"])
     hits = {}
     for j in answered:
@@ -1466,7 +1489,7 @@ def page_title(run):
     #    than an honest label, because it looks like it says something.
     base = pathlib.Path((run.get("meta") or {}).get("repo") or "").name
     n = sum(1 for j in run["judges"].values()
-            if j["status"] in ("ok", "incomplete", "unlisted"))
+            if j["status"] in ANSWERED_STATUS)
     who = f"{n}-judge panel" if n else "panel"
     return f"{base} — {who}" if base else who
 
@@ -1475,12 +1498,22 @@ def build(run, opts):
     esc = html.escape
     js = list(run["judges"].values())
     js.sort(key=lambda j: (j["status"] != "ok", j["name"]))
-    billed = sum((j["meta"].get("cost") or 0) for j in js
-                 if j["meta"].get("billing") != "subscription")
-    quota = sum((j["meta"].get("cost") or 0) for j in js
-                if j["meta"].get("billing") == "subscription")
-    tin = sum((j["meta"].get("tokens") or {}).get("input", 0) for j in js)
-    tout = sum((j["meta"].get("tokens") or {}).get("output", 0) for j in js)
+    # EVERY phase that spent money, not round one alone. run.json records the optional
+    # phases as `phases: {"rebuttal": {judge: record}, "synthesis": record}` with the same
+    # cost/billing/tokens keys as a judge's meta, and the spend cell below labels its
+    # figure "over round 1 + rebuttal" whenever such a phase is priced -- while the sums
+    # under that label covered round one only. Round one at $1 and rebuttals at $9 read
+    # "$1 billed" over both. Found by astra, 2026-09-06.
+    phases = (run["meta"].get("phases") or {})
+    _spent = ([j["meta"] for j in js]
+              + [r for r in (phases.get("rebuttal") or {}).values() if isinstance(r, dict)]
+              + ([phases["synthesis"]] if isinstance(phases.get("synthesis"), dict) else []))
+    billed = sum((m.get("cost") or 0) for m in _spent
+                 if m.get("billing") != "subscription")
+    quota = sum((m.get("cost") or 0) for m in _spent
+                if m.get("billing") == "subscription")
+    tin = sum((m.get("tokens") or {}).get("input") or 0 for m in _spent)
+    tout = sum((m.get("tokens") or {}).get("output") or 0 for m in _spent)
     n_tok = sum(1 for j in js if (j["meta"].get("tokens") or {}).get("input")
                 or (j["meta"].get("tokens") or {}).get("output"))
     part_tok = n_tok and n_tok < len(js)
@@ -1775,7 +1808,6 @@ def build(run, opts):
         f'<span class="r{"" if j["status"] == "ok" else " out"}" '
         f'title="{esc(j["status"])}">{judge_dot(j["name"])}{esc(j["name"])}</span>'
         for j in js)
-    phases = (run["meta"].get("phases") or {})
     # A phase DICT existing is not the same as that phase being PAID FOR. A rebuttal
     # phase whose every judge recorded `cost: null` is present-but-unpriced, and
     # counting it as accounted suppressed the floor caveat on exactly the runs whose
@@ -1803,7 +1835,14 @@ def build(run, opts):
     # "1 recovered from disk", and an `incomplete` judge with a real review read "0 of 1
     # answered" above "1 answered but was cut off". Raised independently by all four judges.
     # Key it on the OBSERVABLE -- is there a review -- and let the lines below qualify it.
-    _answered = [j for j in js if (j.get("review") or "").strip()]
+    # ... AND on the status class. Every failed judge HAS review text: llm-panel writes the
+    # error line into <name>.md in place of the answer, so "is there a review" alone read
+    # "5 of 5 answered" directly above "5 did not answer" on a run whose every judge was
+    # `harness`. A judge answered iff it has a review and its status is not a failure
+    # class (harness, refused, unavailable); `incomplete` and `unlisted` keep counting,
+    # which is what the observable was introduced for. Found by astra, 2026-09-06.
+    _answered = [j for j in js
+                 if j["status"] in ANSWERED_STATUS and (j.get("review") or "").strip()]
     cells = [("the panel", f'<b>{len(_answered)}</b> of {len(js)} answered{why}'
               f'<div class="groster" style="margin-top:8px">{roster}</div>')]
     if claims:
@@ -2115,8 +2154,11 @@ def main():
     if not run["judges"]:
         sys.exit(f"no judges found in {d} — is this a panel run directory?")
 
+    # The WHOLE dir name. `d.name[:15]` kept the timestamp and dropped the `-<pid>` suffix
+    # llm-panel appends so two runs in one second get distinct dirs -- and they rendered
+    # to one file, the second silently over the first. Found by astra, 2026-09-06.
     out = pathlib.Path(a.out).expanduser() if a.out else \
-        pathlib.Path.home() / "reports" / f"panel-{d.parent.name}-{d.name[:15]}.html"
+        pathlib.Path.home() / "reports" / f"panel-{d.parent.name}-{d.name}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(build(run, a), encoding="utf-8")
     print(f"{out}  ({out.stat().st_size / 1024:.0f} KB, {len(run['judges'])} judges, "

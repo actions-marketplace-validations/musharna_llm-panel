@@ -378,8 +378,11 @@ def scrubbed_env(kind, base=None):
     drop = set()
     if kind != "opencode":
         drop |= set(PROVIDER_ENV.values())
-    if kind == "claude":
-        drop.add("ANTHROPIC_API_KEY")      # removed so claude runs on the subscription
+    if kind != "opencode":
+        # claude: removed so it runs on the subscription. codex: not its key at all --
+        # 0.1.2 promised each child sees only its own transport's keys, and this one was
+        # stripped for claude alone. Found by astra, 2026-09-06.
+        drop.add("ANTHROPIC_API_KEY")
     for k in drop:
         env.pop(k, None)
     return env
@@ -597,8 +600,22 @@ def now():
     return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def _bound_read(resp, deadline):
+    """Give the socket under an HTTP response only what is left of the deadline.
+
+    `urlopen(timeout=)` bounds each socket operation, never the call, so a peer that
+    delivers one byte per timeout keeps a read alive indefinitely and the deadline check
+    between reads never runs. CPython keeps the socket at resp.fp.raw._sock; if that is
+    not there, the between-reads check is all we have."""
+    sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+    if sock is not None:
+        sock.settimeout(max(0.05, deadline - time.time()))
+
+
 def strip_ansi(s):
-    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", s)
+    # CSI (colours, cursor moves) and OSC (title, hyperlinks, and OSC 52, which WRITES THE
+    # CLIPBOARD on terminals that support it). Only CSI was stripped. Found by astra, 2026-09-06.
+    return re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]", "", s)
 
 
 def find_session_id(obj, depth=0):
@@ -884,7 +901,8 @@ class _LineEcho:
             *lines, rest = (self.buf.get(judge, "") + piece).split("\n")
             self.buf[judge] = rest
             for ln in lines:
-                sys.stderr.write(f"  [{judge}] {ln}\n")
+                # The final review is stripped; the live echo of the same bytes was not.
+                sys.stderr.write(f"  [{judge}] {strip_ansi(ln)}\n")
             if lines:
                 sys.stderr.flush()
 
@@ -1282,11 +1300,21 @@ def _ask(name, prompt, repo, timeout, agent="panelist", session_file=None,
                 return result(name, "harness", f"codex exec exited {r.returncode}: "
                               f"{said or r.stderr.strip()[:500]}", time.time() - t0)
             out = None
+            usage = {}
             for line in r.stdout.splitlines():
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # `turn.completed` carries what the plan was charged (codex-cli 0.153.4:
+                # input_tokens already includes cached_input_tokens). It was never read,
+                # so every codex row in every run.json -- the AACR benchmarks included --
+                # said 0 in / 0 out, and Astra's own audit run printed UNMEASURED for the
+                # judge that had just spent 13 minutes of quota. Found by astra, 2026-09-06.
+                if ev.get("type") == "turn.completed" and isinstance(ev.get("usage"), dict):
+                    tok = usage.setdefault("tokens", {"input": 0, "output": 0})
+                    tok["input"] += ev["usage"].get("input_tokens") or 0
+                    tok["output"] += ev["usage"].get("output_tokens") or 0
                 m = ev.get("msg") if isinstance(ev.get("msg"), dict) else ev
                 item = m.get("item") or {}
                 # ACCUMULATE. `out = item["text"]` overwrote on every agent message, so a
@@ -1307,7 +1335,8 @@ def _ask(name, prompt, repo, timeout, agent="panelist", session_file=None,
                             {"id": got, "sandbox": "read-only", "cwd": repo, "model": model}))
                         sid = got
             if out:
-                return result(name, "ok", out, time.time() - t0)
+                return result(name, "ok", out, time.time() - t0,
+                              dict(usage, billing="subscription"))
             return result(name, "harness", "codex produced no agent message", time.time() - t0)
 
         if kind == "orvision":
@@ -1342,11 +1371,18 @@ def _ask(name, prompt, repo, timeout, agent="panelist", session_file=None,
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     buf = b""
                     while True:
+                        # Same dribble as the ollama loop: read(65536) blocks until 64 KB
+                        # or EOF, one byte per socket timeout kept it alive past the
+                        # deadline. Found by astra, 2026-09-06.
+                        _bound_read(resp, deadline)
+                        try:
+                            chunk = resp.read1(65536) if time.time() <= deadline else b""
+                        except TimeoutError:
+                            chunk = b""
                         if time.time() > deadline:
                             return result(name, "harness", f"vision request exceeded the "
                                           f"{timeout}s deadline while reading the response",
                                           time.time() - t0)
-                        chunk = resp.read(65536)
                         if not chunk:
                             break
                         buf += chunk
@@ -1542,10 +1578,32 @@ def _ask(name, prompt, repo, timeout, agent="panelist", session_file=None,
                 # each timeout keeps the judge alive indefinitely. Raised by codex and opus.
                 deadline = time.time() + timeout
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    for raw_line in resp:
-                        if time.time() > deadline:
-                            hit_deadline = True
-                            break
+                    # The check between LINES was not enough: a peer that never sends a
+                    # newline held readline() for as long as it kept one byte inside each
+                    # socket timeout, and a socket timeout resets per recv, so bounding it
+                    # alone does not help either. Take one buffered read at a time (read1
+                    # returns after a single recv), each bounded by what is LEFT of the
+                    # deadline, and cut lines ourselves. Found by astra, 2026-09-06.
+                    pending = b""
+                    lines = []
+                    while True:
+                        if lines:
+                            raw_line = lines.pop(0)
+                        else:
+                            if time.time() > deadline:
+                                hit_deadline = True
+                                break
+                            _bound_read(resp, deadline)
+                            try:
+                                chunk = resp.read1(65536)
+                            except TimeoutError:
+                                hit_deadline = True
+                                break
+                            if not chunk:
+                                break
+                            pending += chunk
+                            *lines, pending = pending.split(b"\n")
+                            continue
                         if not raw_line.strip():
                             continue
                         d = json.loads(raw_line.decode())
@@ -1569,6 +1627,9 @@ def _ask(name, prompt, repo, timeout, agent="panelist", session_file=None,
             meta = {"tokens": {"input": d.get("prompt_eval_count") or 0,
                                "output": d.get("eval_count") or 0}, "cost": 0}
             text = (d.get("response") or "").strip()
+            if not text and hit_deadline:
+                return result(name, "harness", f"ollama sent no text inside the {timeout}s "
+                              f"wall-clock deadline", time.time() - t0, meta)
             if not text:
                 return result(name, "harness", f"ollama returned an empty response "
                               f"(done_reason={d.get('done_reason')})", time.time() - t0, meta)
@@ -2072,6 +2133,10 @@ def collect_diff(repo):
     out = ["Here are the uncommitted changes in this repository. Review them.", "",
            "```diff", diff.rstrip(), "```"]
     files = [f for f in untracked.splitlines() if f.strip()]
+    # Our own spill directory is untracked too, and a repository that does not ignore it
+    # listed it here -- so panel B's --diff sent panel A's whole prompt, attached diff and
+    # all, to B's providers as "a new file". Found by astra, 2026-09-06.
+    files = [f for f in files if f.split("/", 1)[0] != MATERIAL_DIRNAME]
     if files:
         # The prompt tells judges these ARE the uncommitted changes, so sending bare
         # filenames meant a brand-new file -- the likeliest place for a fresh defect --
@@ -2643,11 +2708,18 @@ def codex_rpc(calls, timeout=45):
         p.stdin.flush()
         # `readline` is unbounded; poll the deadline through a thread so a wedged server
         # cannot pin the terminal. The thread dies with the process.
+        # Wait on the DEADLINE, not on the launcher: `codex` on PATH is a Node launcher
+        # that can exit while its child still holds our pipes, and a watchdog that began
+        # `if p.poll() is None` then did nothing while `for line in p.stdout` blocked for
+        # as long as the orphan lived. The group id outlives the launcher, so the kill
+        # still reaches the child. Found by astra, 2026-09-06.
+        answered = threading.Event()
         def _reap():
-            if p.poll() is None:
-                time.sleep(max(0.0, deadline - time.time()))
-                if p.poll() is None:
+            if not answered.wait(max(0.0, deadline - time.time())):
+                try:
                     os.killpg(p.pid, signal.SIGKILL)
+                except OSError:
+                    pass
         threading.Thread(target=_reap, daemon=True).start()
         for line in p.stdout:
             try:
@@ -2665,6 +2737,7 @@ def codex_rpc(calls, timeout=45):
     except BrokenPipeError:
         pass
     finally:
+        answered.set()
         # _kill_group, not a bare killpg: the server can exit between poll() and the
         # kill, and ESRCH there turned "codex exited 3" into a traceback.
         if p.poll() is None:
@@ -2760,6 +2833,53 @@ def run_check(judges, repo, timeout, agent):
     if bad:
         print("`harness` failures are OUR plumbing, not the model saying no.")
     return 0 if not bad else 3
+
+
+def enforce_trust(judges, synth, repo, agent, unsafe_agent):
+    """Every gate between "the user named these judges" and "a judge process runs in the
+    reviewed tree", in one place, because it was in one place in main() and `--check`
+    sat above it: `sys.exit(run_check(...))` launched every judge before either gate had
+    its turn, so `--check` in a tree carrying an opencode plugin ran the plugin. And the
+    claude gate consulted `judges` alone where the opencode gate already added the
+    synthesizer, so `--synthesize claude-opus` ran a hostile tree's hooks. Both found by
+    astra, 2026-09-06. Anything that runs a judge calls this first."""
+    everyone = judges + ([synth] if synth else [])
+    # The synthesizer runs the same way a judge does, in the same repo, so it must
+    # clear the same bar. The guard used to consult `judges` only, so
+    # `--judges codex --synthesize big-pickle --agent build` skipped it entirely.
+    if any(ROSTER[j][0] == "opencode" for j in everyone):
+        writable = agent_can_write(agent, repo)
+        if writable is not False and not unsafe_agent:
+            why = ("it is not defined in your opencode config" if writable is None
+                   else "its config enables at least one tool that is not read-only "
+                        f"(read-only means only: {', '.join(sorted(READ_ONLY_TOOLS))})")
+            die(f"agent '{agent}' is not verified read-only ({why}), so a judge could "
+                f"modify the very repo it is reviewing. Fix the agent definition, or pass "
+                f"--unsafe-agent if you really mean it. The read-only `panelist` definition "
+                f"ships with llm-panel as opencode.jsonc "
+                f"(https://github.com/musharna/llm-panel/blob/main/opencode.jsonc): merge its "
+                f"agent.panelist block into ~/.config/opencode/opencode.jsonc.", 9)
+        # The agent may be read-only and the REPOSITORY still gets to run code: opencode
+        # loads plugins, tools and agent definitions from the tree it is pointed at.
+        hazards = repo_opencode_hazards(repo)
+        if hazards and not unsafe_agent:
+            die("the repository under review carries opencode configuration that the judges "
+                "would load and run as you, with your keys in their environment:\n  - "
+                + "\n  - ".join(hazards)
+                + "\nReviewing a repository means trusting its .opencode/ and opencode.json[c]. "
+                  "Remove or inspect them, or pass --unsafe-agent if you really mean it.", 9)
+    if any(ROSTER[j][0] == "claude" for j in everyone):
+        # Measured 2026-09-04 (claude-code on this laptop): `claude -p` in a tree it has
+        # never been trusted with ran that tree's SessionStart and UserPromptSubmit hooks
+        # from .claude/settings.json, no prompt. That is the opencode hazard exactly, and
+        # it used to get a NOTE on stderr where opencode gets a refusal.
+        _cl = repo_claude_hazards(repo)
+        if _cl and not unsafe_agent:
+            die("the repository under review carries claude configuration that a claude judge "
+                "would load and run as you:\n  - " + "\n  - ".join(_cl)
+                + "\nReviewing a repository means trusting its .claude/settings*.json hooks and "
+                  ".mcp.json. Remove or inspect them, or pass --unsafe-agent if you really "
+                  "mean it.", 9)
 
 
 def main():
@@ -2861,9 +2981,14 @@ def main():
     # inside the reviewed tree, where a slower judge can read a faster one's review and
     # round-one independence is gone. Verified by execution 2026-08-21. Raised by codex and
     # opus. `os.path.abspath` normalises `..` but does NOT follow links; `resolve()` does.
+    state_ephemeral = False
     if cache_is_inside(STATE, repo):
         STATE = pathlib.Path.home() / ".llm-panel"
         if cache_is_inside(STATE, repo):
+            # This run gets a mkdtemp of its own, so nothing under it -- threads, their
+            # locks, `--show` -- survives to the next run. --thread refuses below rather
+            # than start a fresh conversation every turn. Found by astra, 2026-09-06.
+            state_ephemeral = True
             # Reviewing a repository rooted at $HOME puts the FALLBACK inside it too, and
             # nothing checked that, so finished answers landed back where a slower judge
             # could read them -- the very thing the first check exists to prevent.
@@ -3073,6 +3198,7 @@ def main():
         # other sessions' jobs; honour an explicit --timeout so contention does not
         # get misread as 13 dead judges.
         cap = a.timeout if explicit_timeout else 180
+        enforce_trust(judges, None, repo, a.agent, a.unsafe_agent)
         sys.exit(run_check(judges, repo, cap, a.agent))
 
     # The question comes BEFORE the transport warnings and the agent guard below: with no
@@ -3115,42 +3241,7 @@ def main():
             sys.stderr.write(f"llm-panel: `{BINARY[kind]}` is not on PATH, so {j} will "
                              f"report a transport failure; the other judges still run\n")
 
-    # The synthesizer runs the same way a judge does, in the same repo, so it must
-    # clear the same bar. The guard used to consult `judges` only, so
-    # `--judges codex --synthesize big-pickle --agent build` skipped it entirely.
-    if any(ROSTER[j][0] == "opencode" for j in judges + ([a.synthesize] if a.synthesize else [])):
-        writable = agent_can_write(a.agent, repo)
-        if writable is not False and not a.unsafe_agent:
-            why = ("it is not defined in your opencode config" if writable is None
-                   else "its config enables at least one tool that is not read-only "
-                        f"(read-only means only: {', '.join(sorted(READ_ONLY_TOOLS))})")
-            die(f"agent '{a.agent}' is not verified read-only ({why}), so a judge could "
-                f"modify the very repo it is reviewing. Fix the agent definition, or pass "
-                f"--unsafe-agent if you really mean it. The read-only `panelist` definition "
-                f"ships with llm-panel as opencode.jsonc "
-                f"(https://github.com/musharna/llm-panel/blob/main/opencode.jsonc): merge its "
-                f"agent.panelist block into ~/.config/opencode/opencode.jsonc.", 9)
-        # The agent may be read-only and the REPOSITORY still gets to run code: opencode
-        # loads plugins, tools and agent definitions from the tree it is pointed at.
-        hazards = repo_opencode_hazards(repo)
-        if hazards and not a.unsafe_agent:
-            die("the repository under review carries opencode configuration that the judges "
-                "would load and run as you, with your keys in their environment:\n  - "
-                + "\n  - ".join(hazards)
-                + "\nReviewing a repository means trusting its .opencode/ and opencode.json[c]. "
-                  "Remove or inspect them, or pass --unsafe-agent if you really mean it.", 9)
-    if any(ROSTER[j][0] == "claude" for j in judges):
-        # Measured 2026-09-04 (claude-code on this laptop): `claude -p` in a tree it has
-        # never been trusted with ran that tree's SessionStart and UserPromptSubmit hooks
-        # from .claude/settings.json, no prompt. That is the opencode hazard exactly, and
-        # it used to get a NOTE on stderr where opencode gets a refusal.
-        _cl = repo_claude_hazards(repo)
-        if _cl and not a.unsafe_agent:
-            die("the repository under review carries claude configuration that a claude judge "
-                "would load and run as you:\n  - " + "\n  - ".join(_cl)
-                + "\nReviewing a repository means trusting its .claude/settings*.json hooks and "
-                  ".mcp.json. Remove or inspect them, or pass --unsafe-agent if you really "
-                  "mean it.", 9)
+    enforce_trust(judges, a.synthesize, repo, a.agent, a.unsafe_agent)
 
     # Snapshot the tree BEFORE any judge runs. The config guard above is advisory -- it
     # cannot see `OPENCODE_CONFIG_CONTENT`, tool defaults for names it does not enumerate,
@@ -3191,8 +3282,16 @@ def main():
 
     sessions = {}
     if a.thread:
+        if state_ephemeral:
+            die(f"--thread needs a cache that outlives this run, and the usual locations "
+                f"are all inside the reviewed tree {repo}, so this run's cache is a "
+                f"temporary directory. Set XDG_CACHE_HOME to a directory outside it.")
         tdir = STATE / "threads" / thread_key(a.thread, repo)
         tdir.mkdir(parents=True, exist_ok=True)
+        # Every turn's prompt -- attached diffs included -- lives here for the life of the
+        # thread. mkdir and write_text took the umask, so under 0022 that was 0644 under
+        # 0755 for every other local user; only rundir got 0o700. Found by astra, 2026-09-06.
+        os.chmod(tdir, 0o700)
         # A thread is a conversation; two panels running it at once both compute the
         # same turn number, overwrite turn-001.md, and race to write the same session
         # file, after which the next turn resumes whichever id landed last and the
@@ -3224,7 +3323,9 @@ def main():
         sys.stderr.write(f"llm-panel: thread '{a.thread}', turn {turn} — "
                          f"{len(resuming)} judge(s) resuming, {len(judges)-len(resuming)} starting "
                          f"fresh{': ' + ', '.join(resuming) if resuming else ''}\n")
-        (tdir / f"turn-{turn:03d}.md").write_text(a.prompt)
+        with open(os.open(tdir / f"turn-{turn:03d}.md", os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                          0o600), "w", encoding="utf-8") as fh:
+            fh.write(a.prompt)
 
     sys.stderr.write(f"llm-panel: asking {len(judges)} judges in parallel "
                      f"({', '.join(judges)}) — this takes as long as the slowest one\n")

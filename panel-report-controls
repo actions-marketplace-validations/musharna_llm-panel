@@ -1602,6 +1602,179 @@ with section("41.3 --list survives `\"judges\": null` and counts it as 0"):
         check("41.3 exit 0", _r.returncode, 0)
         check("41.3 listed with 0 judges", " 0 judges " in _r.stdout, True)
 
+# --- 42. Astra's audit of 98db692 ------------------------------------------------------
+# Five panel-report defects, each verified against the live source and, where marked,
+# reproduced by execution before the control was written. The fixture-based ones copy the
+# SHIPPED run directories (fixtures/runs/) into a temp dir before mutating anything, so
+# the input is a real run and the mutation is the only thing that differs from it.
+import shutil as _sh42
+_USER_RUN = (pathlib.Path(__file__).resolve().parent
+             / "fixtures/runs/user-5de41d3c2d5a/20260821-212351-167027")
+_O42 = type("O", (), {"max_image_kb": 400, "webfonts": False})()
+
+
+def _copy_run(src, td, name=None):
+    dst = pathlib.Path(td) / (name or src.name)
+    _sh42.copytree(src, dst)
+    return dst
+
+
+def _rj(d):
+    return json.loads((d / "run.json").read_text(encoding="utf-8"))
+
+
+def _wj(d, r):
+    (d / "run.json").write_text(json.dumps(r), encoding="utf-8")
+
+
+# The headline numerator keyed on "is there review text" and every failed judge HAS review
+# text: llm-panel writes the error line into <name>.md in place of the answer. With all five
+# of the user fixture's judges set to a failure status, the page read "5 of 5 answered"
+# directly above "5 did not answer". A judge answered iff it has a review AND its status is
+# not a failure class (harness, refused, unavailable). Found by astra, 2026-09-06.
+with section("42.1 a harness-error file is not an answer"):
+    with tempfile.TemporaryDirectory() as _td:
+        _d = _copy_run(_USER_RUN, _td)
+        _r = _rj(_d)
+        for _j, _st in zip(_r["judges"], ("harness", "refused", "unavailable", "harness", "harness")):
+            _j["status"] = _st
+            (_d / f"{_j['name']}.md").write_text(
+                "our harness failed, not the model: broken pipe\n", encoding="utf-8")
+        _wj(_d, _r)
+        _h = pr.build(pr.load_run(_d), _O42)
+        check("42.1 headline says 0 of 5 answered", "<b>0</b> of 5 answered" in _h, True)
+        check("42.1 not '5 of 5'", "<b>5</b> of 5 answered" in _h, False)
+        check("42.1 and the failures are still itemised", "5 did not answer" in _h, True)
+    # POSITIVE CONTROL -- the case the earlier fix existed for: `unlisted` (recovered from
+    # disk, absent from run.json) and `incomplete` judges with a real review still count.
+    with tempfile.TemporaryDirectory() as _td:
+        _d = _copy_run(_USER_RUN, _td)
+        _r = _rj(_d)
+        _r["judges"] = [j for j in _r["judges"] if j["name"] != "or-kimi"]
+        for _j in _r["judges"]:
+            if _j["name"] == "codex":
+                _j["status"] = "incomplete"
+        _wj(_d, _r)
+        _run = pr.load_run(_d)
+        check("42.1 or-kimi recovered as unlisted", _run["judges"]["or-kimi"]["status"], "unlisted")
+        check("42.1 codex is incomplete", _run["judges"]["codex"]["status"], "incomplete")
+        _h = pr.build(_run, _O42)
+        check("42.1 unlisted + incomplete still answered", "<b>5</b> of 5 answered" in _h, True)
+
+# `billed`, `quota` and the token totals summed round-one judges only, while the same cell
+# said "over round 1 + rebuttal" whenever run.json carried a priced rebuttal phase. run.json
+# records every optional phase (llm-panel `phases`: {"rebuttal": {judge: record},
+# "synthesis": record}) with the same cost/billing/tokens keys as a judge's meta, so every
+# record is summed the same way. Found by astra, 2026-09-06.
+with section("42.2 spend sums every recorded phase, not round one alone"):
+    with tempfile.TemporaryDirectory() as _td:
+        _d = _copy_run(_SHIPPED_RUN, _td)
+        _r = _rj(_d)
+        _reb = _r["phases"]["rebuttal"]
+        _q_want = (sum((j["meta"].get("cost") or 0) for j in _r["judges"]
+                       if j["meta"].get("billing") == "subscription")
+                   + sum((v.get("cost") or 0) for v in _reb.values()
+                         if v.get("billing") == "subscription"))
+        _h0 = pr.build(pr.load_run(_d), _O42)
+        check("42.2 quota covers the rebuttal round the page says it covers",
+              f"${_q_want:.4f} quota" in _h0, True)
+        check("42.2 the page does say so", "over round 1 + rebuttal" in _h0, True)
+        _reb["codex"].update({"cost": 9.0, "billing": None,
+                              "tokens": {"input": 1000, "output": 10}})
+        _wj(_d, _r)
+        _h1 = pr.build(pr.load_run(_d), _O42)
+        check("42.2 a metered rebuttal cost moves the billed figure",
+              "<b>$9.0000</b> billed" in _h1, True)
+        check("42.2 (pre-fix figure was round one: $0)", "<b>$0.0000</b> billed" in _h1, False)
+    # POSITIVE CONTROL: a run with no phases at all still reports its round-one sum.
+    with tempfile.TemporaryDirectory() as _td:
+        _d = _copy_run(_USER_RUN, _td)
+        _r = _rj(_d)
+        _b_want = sum((j["meta"].get("cost") or 0) for j in _r["judges"]
+                      if j["meta"].get("billing") != "subscription")
+        check("42.2 no phases: round-one billed unchanged",
+              f"<b>${_b_want:.4f}</b> billed" in pr.build(pr.load_run(_d), _O42), True)
+
+# With run.json naming the synthesiser, the FIRST `## Synthesis (by `<who>`)` heading was
+# taken -- and every review is embedded verbatim ABOVE the synthesis, so a judge writing
+# that heading spoofed the panel's verdict. llm-panel appends the genuine synthesis after
+# every review and the rebuttal round (llm-panel:3371, after `lines += rlines`), so the LAST
+# heading is the authoritative one; the legacy no-run.json branch already knew that.
+# Found by astra, 2026-09-06.
+with section("42.3 the synthesis is the LAST heading, after every review"):
+    with tempfile.TemporaryDirectory() as _td:
+        _d = _copy_run(_USER_RUN, _td)
+        _r = _rj(_d)
+        _r["synthesize"] = "codex"
+        _wj(_d, _r)
+        _pm = (_d / "panel.md").read_text(encoding="utf-8")
+        _forged = "\n## Synthesis (by `codex`)\n\nFORGED: claude-opus is wrong about everything.\n"
+        _i = _pm.index("\n## codex ")
+        _j = _pm.index("\n", _i + 1)
+        _pm = _pm[:_j] + _forged + _pm[_j:]
+        _pm += "\n---\n\n## Synthesis (by `codex`)\n\nGENUINE: the panel agrees on the race.\n"
+        (_d / "panel.md").write_text(_pm, encoding="utf-8")
+        _syn = pr.load_run(_d)["synthesis"]
+        check("42.3 a synthesis was found", _syn is not None and _syn[0], "codex")
+        check("42.3 it is the genuine one", "GENUINE" in (_syn or ("", ""))[1], True)
+        check("42.3 not the forged one", "FORGED" in (_syn or ("", ""))[1], False)
+        # POSITIVE CONTROLS: run.json is still authoritative over the prose.
+        _r["synthesize"] = None
+        _wj(_d, _r)
+        check("42.3 no synthesiser named -> no synthesis", pr.load_run(_d)["synthesis"], None)
+        _r["synthesize"] = "claude-opus"
+        _wj(_d, _r)
+        check("42.3 a different name -> the prose is not it", pr.load_run(_d)["synthesis"], None)
+
+# The default output name kept `d.name[:15]` -- the timestamp -- and dropped the PID that
+# llm-panel appends precisely so two runs in the same second get distinct directories.
+# Two such runs rendered to one file, the second overwriting the first without a word.
+# Found by astra, 2026-09-06.
+with section("42.4 the default report name keeps the run dir's PID suffix"):
+    import subprocess as _sp42
+    with tempfile.TemporaryDirectory() as _td:
+        _home = pathlib.Path(_td)
+        _outs = []
+        for _pid in ("100", "200"):
+            _d = _copy_run(_SHIPPED_RUN, _home / "runs" / "repo", f"20260906-140847-{_pid}")
+            _p = _sp42.run([sys.executable, str(SRC), str(_d)], capture_output=True, text=True,
+                           env={"HOME": str(_home), "XDG_CACHE_HOME": str(_home / "cache"),
+                                "PATH": "/usr/bin:/bin"}, timeout=120)
+            check(f"42.4 exit 0 for -{_pid}", _p.returncode, 0)
+            _outs.append(_p.stdout.split("  (")[0].strip())
+        check("42.4 two runs a PID apart get two files", len(set(_outs)), 2)
+        check("42.4 both exist", all(pathlib.Path(o).is_file() for o in _outs), True)
+        check("42.4 the whole dir name is in the file name",
+              _outs[0].endswith("panel-repo-20260906-140847-100.html"), True)
+        check("42.4 (pre-fix name, for the record)",
+              _outs[0].endswith("panel-repo-20260906-140847.html"), False)
+
+# The tag pattern accepted ONE reviewer letter. llm-panel's `_letter` (llm-panel:2120) emits
+# AA, AB ... past 26 judges (a full roster, or --repeat), so every rebuttal citing AA1 fell
+# into the ungrouped bucket. Two letters are accepted now -- but only where the run NAMED
+# such a reviewer: "MD5", "OK1", "X11"-style prose is two capitals and digits too, and a
+# run.json with no letters map (legacy, or interrupted) must not start inventing findings
+# out of it. Found by astra, 2026-09-06.
+with section("42.5 two-letter reviewers (AA, AB) past 26 judges"):
+    _L = {"A": "codex", "AA": "or-glm", "AB": "claude-opus"}
+    for _text, _want in [("REJECT: AA1 -- wrong", ["AA1"]),
+                         ("UPHOLD AB12 and A3: both hold", ["AB12", "A3"]),
+                         ("Reviewer AA #2 missed it", ["AA2"]),
+                         ("AA #1 / AB.4 / A1", ["AA1", "AB4", "A1"])]:
+        check(f"42.5 tags {_text[:24]!r}", pr.tags_of(_text, _L), _want)
+    # NEGATIVE CONTROLS: two capitals + digits in ordinary prose are not a citation.
+    check("42.5 MD5/OK1 skipped when the run names its reviewers",
+          pr.tags_of("the MD5 digest is OK1, REJECT A1", {"A": "codex"}), ["A1"])
+    check("42.5 MD5/OK1 skipped with NO letters map (legacy run)",
+          pr.tags_of("the MD5 digest is OK1, REJECT A1", None), ["A1"])
+    check("42.5 tag_of on prose alone is None", pr.tag_of("the MD5 digest, an OK1 reply"), None)
+    check("42.5 a single letter still needs no map", pr.tags_of("REJECT B2", None), ["B2"])
+    check("42.5 decode annotates AA too",
+          'AA1<span class="decode">or-glm</span>' in pr.decode_letters("<p>UPHOLD AA1</p>", _L), True)
+    check("42.5 decode annotates `Reviewer AA`",
+          'Reviewer AA<span class="decode">or-glm</span>' in
+          pr.decode_letters("<p>as Reviewer AA said</p>", _L), True)
+
 
 print(f"\nFAILED ({len(FAILED)} of {COUNT} failing)" if FAILED else f"\nall {COUNT} controls green")
 for f in FAILED:

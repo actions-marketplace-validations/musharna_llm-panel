@@ -1973,6 +1973,203 @@ with section("25.6 every option has a help string"):
         check(f"25.6 {_flag} is explained", bool(_line) and len(_line.strip()) > len(_flag) + 12, True)
 
 
+# --- 26: the Astra audit, 2026-09-06 --------------------------------------------------
+# One turn of gpt-6-astra over the tree at 98db692 found what three earlier audits did not.
+# Every control here was run against that tree first and failed for the reason stated.
+import contextlib as _ctx26, http.server as _hs26, io as _io26, os as _os26  # noqa: E402
+import socketserver as _ss26, stat as _stat26, subprocess as _sp26  # noqa: E402
+import tempfile as _tf26, threading as _th26, time as _time26  # noqa: E402
+
+_d26 = pathlib.Path(_tf26.mkdtemp())
+_bin26 = _d26 / "bin"; _bin26.mkdir()
+# A codex that answers at once and reports the usage shape codex-cli 0.153.4 really
+# emits (captured live 2026-09-06). A claude that records having been run at all.
+(_bin26 / "codex").write_text(f"""#!/bin/sh
+case "$1" in
+  exec) echo '{{"type":"item.completed","item":{{"type":"agent_message","text":"PONG"}}}}'
+        echo '{{"type":"turn.completed","usage":{{"input_tokens":14625,"cached_input_tokens":11136,"cache_write_input_tokens":0,"output_tokens":6,"reasoning_output_tokens":0}}}}' ;;
+  app-server) sleep 20 & exit 0 ;;
+  *) echo codex-cli 0.153.4 ;;
+esac
+""")
+(_bin26 / "claude").write_text(f"#!/bin/sh\ntouch {_d26}/claude-ran\n"
+                               "echo '{\"type\":\"result\",\"result\":\"PONG\"}'\n")
+for _b in ("codex", "claude"):
+    (_bin26 / _b).chmod(0o755)
+
+
+def _repo26(**files):
+    r = pathlib.Path(_tf26.mkdtemp(dir=_d26))
+    _sp26.run(["git", "-C", str(r), "init", "-q"], check=True)
+    (r / "a.txt").write_text("a\n")
+    _sp26.run(["git", "-C", str(r), "add", "."], check=True)
+    _sp26.run(["git", "-C", str(r), "-c", "user.email=c@c", "-c", "user.name=c",
+               "commit", "-qm", "init"], check=True)
+    for rel, body in files.items():
+        (r / rel).parent.mkdir(parents=True, exist_ok=True)
+        (r / rel).write_text(body)
+    return r
+
+
+def _run26(args, repo, home=None, cache=None, **extra):
+    env = {"HOME": str(home or _d26), "XDG_CONFIG_HOME": str(_d26 / "cfg"),
+           "XDG_CACHE_HOME": str(cache or (_d26 / "cache")),
+           "PATH": f"{_bin26}:/usr/bin:/bin", "TZ": "America/New_York", **extra}
+    return _sp26.run([sys.executable, str(SRC), *args, "--cwd", str(repo)],
+                     capture_output=True, text=True, timeout=120, env=env)
+
+
+_HAZ = {".mcp.json": "{}"}   # one file `claude -p` loads from the tree: a hazard by itself
+
+with section("26.1 --check runs no judge before the trust gates (found by astra)"):
+    # `sys.exit(run_check(...))` sat ABOVE both gates, so `--check` in a hostile tree
+    # launched every judge in it -- the plugin ran, then the gate never got its turn.
+    _r = _repo26(**_HAZ)
+    with _ctx26.suppress(FileNotFoundError):
+        (_d26 / "claude-ran").unlink()
+    _p = _run26(["--check", "--judges", "claude-opus"], _r)
+    check("26.1 exit 9 with the claude-hazard message", _p.returncode == 9
+          and "carries claude configuration" in _p.stderr, True)
+    check("26.1 the claude binary never ran", (_d26 / "claude-ran").exists(), False)
+    _p = _run26(["--check", "--judges", "claude-opus", "--unsafe-agent"], _r)
+    check("26.1 positive: --unsafe-agent lets --check run it", (_d26 / "claude-ran").exists(), True)
+
+with section("26.2 the synthesizer clears the claude gate too (found by astra)"):
+    # The opencode gate already included `a.synthesize`; the claude gate one block down
+    # consulted `judges` only, so `--synthesize claude-opus` ran a hostile tree's hooks.
+    _r = _repo26(**_HAZ)
+    with _ctx26.suppress(FileNotFoundError):
+        (_d26 / "claude-ran").unlink()
+    _p = _run26(["--judges", "codex", "--synthesize", "claude-opus", "q"], _r)
+    check("26.2 exit 9 naming the claude hazard", _p.returncode == 9
+          and "carries claude configuration" in _p.stderr, True)
+    check("26.2 the claude binary never ran", (_d26 / "claude-ran").exists(), False)
+    _p = _run26(["--judges", "codex", "q"], _r)
+    check("26.2 positive: the same tree with no claude judge or synthesizer runs", _p.returncode, 0)
+
+with section("26.3 a codex child does not inherit ANTHROPIC_API_KEY (found by astra)"):
+    # 0.1.2 promised each child sees only its own transport's keys. The Anthropic key was
+    # stripped for claude (to stay on the subscription) and for nobody else.
+    _base = {"PATH": "/bin", "ANTHROPIC_API_KEY": "sk-ant-x", "OPENROUTER_API_KEY": "or-x"}
+    check("26.3 codex: no Anthropic key", "ANTHROPIC_API_KEY" in lp.scrubbed_env("codex", _base), False)
+    check("26.3 codex: no OpenRouter key either (unchanged)",
+          "OPENROUTER_API_KEY" in lp.scrubbed_env("codex", _base), False)
+    check("26.3 claude: no Anthropic key (unchanged)",
+          "ANTHROPIC_API_KEY" in lp.scrubbed_env("claude", _base), False)
+    check("26.3 positive: opencode keeps every provider key, Anthropic included",
+          all(k in lp.scrubbed_env("opencode", _base) for k in ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY")),
+          True)
+
+with section("26.4 a codex judge's tokens are recorded (found by astra)"):
+    # `codex exec --json` ends every turn with `turn.completed` carrying `usage`; the
+    # transport ignored it and returned no meta, so every codex row in every run.json --
+    # the AACR benchmarks included -- read 0 in / 0 out, and Astra's own audit run printed
+    # "UNMEASURED" for the judge that had just spent 13 minutes of plan quota.
+    _r = _repo26()
+    _c = _d26 / "cache26.4"
+    _p = _run26(["--judges", "codex", "q"], _r, cache=_c)
+    _rj = sorted(_c.glob("llm-panel/runs/*/*/run.json"))
+    _j = (_json.loads(_rj[-1].read_text())["judges"] or [{}])[0] if _rj else {}
+    check("26.4 (setup) the panel ran", _p.returncode == 0 and bool(_rj), True)
+    check("26.4 input tokens are what codex billed, cached included",
+          (_j.get("tokens") or {}).get("input"), 14625)
+    check("26.4 output tokens", (_j.get("tokens") or {}).get("output"), 6)
+    check("26.4 spend is marked subscription, not billed", _j.get("billing"), "subscription")
+    check("26.4 positive: the report line says so", "14,625 in / 6 out" in _p.stdout, True)
+
+with section("26.5 --thread turn files are owner-only (found by astra)"):
+    # `tdir.mkdir` and `write_text` used the umask; only rundir got 0o700. The thread's
+    # every prompt -- attached diffs included -- sat 0644 under 0755 for other local users.
+    _old = _os26.umask(0o022)
+    try:
+        _r = _repo26()
+        _c = _d26 / "cache26.5"
+        _p = _run26(["--thread", "t", "--judges", "codex", "q"], _r, cache=_c)
+    finally:
+        _os26.umask(_old)
+    _turns = sorted(_c.glob("llm-panel/threads/*/turn-001.md"))
+    check("26.5 (setup) the thread turn was written", _p.returncode == 0 and bool(_turns), True)
+    if _turns:
+        check("26.5 turn file is 0600", _stat26.S_IMODE(_turns[0].stat().st_mode), 0o600)
+        check("26.5 thread dir is 0700", _stat26.S_IMODE(_turns[0].parent.stat().st_mode), 0o700)
+
+with section("26.6 --diff never ships another panel's spilled material (found by astra)"):
+    # The untracked-file list came from `ls-files --others --exclude-standard` with no
+    # carve-out for .llm-panel-material/, so in a repo that does not ignore it, panel B's
+    # --diff sent panel A's whole prompt to B's providers.
+    _r = _repo26(**{".llm-panel-material/material-1.md": "SECRET-MATERIAL-OF-PANEL-A\n",
+                    "new.py": "print('hello')\n"})
+    _out = lp.collect_diff(str(_r))
+    _txt = _out if isinstance(_out, str) else "\n".join(map(str, _out))
+    check("26.6 positive: the new untracked file is reviewed", "new.py" in _txt and "hello" in _txt, True)
+    check("26.6 the material dir is not", "SECRET-MATERIAL" in _txt or "material-1.md" in _txt, False)
+
+with section("26.7 --stream echoes no terminal escapes (found by astra)"):
+    # The live echo wrote raw judge lines; the final review is stripped, the stream was not.
+    # OSC 52 writes the clipboard on terminals that support it.
+    _osc = "\x1b]52;c;aGVsbG8=\x07"
+    check("26.7 strip_ansi removes an OSC sequence", lp.strip_ansi(f"{_osc}hi"), "hi")
+    check("26.7 strip_ansi still removes CSI (unchanged)", lp.strip_ansi("\x1b[31mred\x1b[0m"), "red")
+    _err = _io26.StringIO()
+    with _ctx26.redirect_stderr(_err):
+        lp._LineEcho().feed("j", f"{_osc}hello\n")
+    check("26.7 the streamed line carries the words", "hello" in _err.getvalue(), True)
+    check("26.7 and no escape byte", "\x1b" in _err.getvalue(), False)
+
+with section("26.8 a dribbling ollama response cannot outlive --timeout (found by astra)"):
+    # The deadline was checked between LINES; a peer that never sends a newline holds
+    # `for raw_line in resp` for as long as it keeps one byte inside each socket timeout.
+    class _Drip(_hs26.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200); self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            for _ in range(40):          # 6 s of bytes, never a newline
+                try:
+                    self.wfile.write(b" "); self.wfile.flush()
+                except OSError:
+                    return
+                _time26.sleep(0.15)
+        def log_message(self, *a): pass
+    _srv = _ss26.TCPServer(("127.0.0.1", 0), _Drip); _srv.daemon_threads = True
+    _th26.Thread(target=_srv.serve_forever, daemon=True).start()
+    _os26.environ["OLLAMA_HOST"] = f"127.0.0.1:{_srv.server_address[1]}"
+    _t0 = _time26.time()
+    _res = lp.ask("local-small", "q", str(_d26), 1)
+    _took = _time26.time() - _t0
+    _srv.shutdown()
+    _os26.environ.pop("OLLAMA_HOST", None)
+    check("26.8 the judge returns within a little more than --timeout", _took < 3.0, True)
+    check("26.8 and it is a harness failure that names the deadline",
+          _res["status"] == "harness" and "deadline" in _res["text"], True)
+
+with section("26.9 --usage gives up at its deadline even if the launcher exited (found by astra)"):
+    # The watchdog began `if p.poll() is None` -- a launcher that exits while a child holds
+    # the pipes left `for line in p.stdout` blocked past the deadline. The fake app-server
+    # above does exactly that: a 20 s sleep inherits stdout, the launcher exits at once.
+    _old_path = _os26.environ["PATH"]
+    _os26.environ["PATH"] = f"{_bin26}:{_old_path}"
+    _t0 = _time26.time()
+    try:
+        with _ctx26.suppress(SystemExit):
+            lp.codex_rpc([("account/rateLimits/read", {})], timeout=1)
+    finally:
+        _os26.environ["PATH"] = _old_path
+    check("26.9 returned at the deadline, not when the orphan died", _time26.time() - _t0 < 4.0, True)
+
+with section("26.10 --thread refuses an ephemeral cache instead of forgetting (found by astra)"):
+    # With HOME and XDG_CACHE_HOME both inside the reviewed tree, STATE becomes a fresh
+    # mkdtemp per run, so every --thread turn started a new conversation and took a new
+    # lock while the banner said "resuming". Refusing with the fix in the message beats a
+    # thread that silently is not one.
+    _r = _repo26()
+    _p = _run26(["--thread", "t", "--judges", "codex", "q"], _r, home=_r, cache=_r / ".c")
+    check("26.10 exit 1 and the message names --thread and XDG_CACHE_HOME",
+          _p.returncode == 1 and "--thread" in _p.stderr and "XDG_CACHE_HOME" in _p.stderr, True)
+    _p = _run26(["--judges", "codex", "q"], _r, home=_r, cache=_r / ".c")
+    check("26.10 positive: the same setup without --thread still runs", _p.returncode, 0)
+
+
 print(f"\nFAILED ({len(FAILED)} of {COUNT} failing)" if FAILED else f"\nall {COUNT} controls green")
 for f in FAILED:
     print("  -", f)

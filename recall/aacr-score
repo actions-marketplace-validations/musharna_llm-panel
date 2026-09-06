@@ -27,6 +27,11 @@ signal.alarm(5400)
 
 E = pathlib.Path.home() / "aacr-bench" / "evaluation"
 sys.path.insert(0, str(E))
+# Resolve the argument paths BEFORE the chdir below: relative `results instances.jsonl scores`
+# mean the caller's directory, and until this moved they were read under E instead.
+# Found by astra, 2026-09-06.
+results, insts_path, out = (pathlib.Path(sys.argv[i]).resolve() for i in (1, 2, 3))
+line_k = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 os.chdir(E)
 
 import judge, schema, evaluate as ev, config  # noqa: E402
@@ -74,8 +79,6 @@ async def counting(ref, gen):
 # so rebinding it on the judge module is both necessary and sufficient.
 judge.match_semantic = counting
 
-results, insts_path, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
-line_k = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 insts = schema.load_instances(insts_path)
 have = [i for i in insts if config.result_path(results, i.instance_id).is_file()]
 print(f"  {len(have)}/{len(insts)} instances have result files; line_k={line_k}")

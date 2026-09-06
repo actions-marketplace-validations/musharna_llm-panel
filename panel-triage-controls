@@ -212,6 +212,67 @@ with section("6.2 and the tool as a whole still exits 0 with that run in a root"
         check("6.2 the run is named as unreadable", "UnicodeDecodeError" in out.stdout, True)
         check("6.2 no traceback", "Traceback" in out.stderr, False)
 
+
+# --- 7. a phase that RAN AND FAILED is a problem, whatever is on disk ------------------
+# The rebuttal check asked "does <name>.rebuttal.md exist" and the synthesis check "does
+# panel.md exist" -- artifact presence, not outcome. llm-panel writes the file either way
+# (the error text goes in place of the answer), and records what happened in run.json's
+# `phases` ({"rebuttal": {judge: record}, "synthesis": record}, each with a `status`). A
+# run whose every rebuttal and synthesis failed had all its files and was not --bad.
+# Built on a copy of the SHIPPED fixture run, mutated in place. Found by astra, 2026-09-06.
+import shutil as _sh7
+_SHIPPED_RUN = (pathlib.Path(__file__).resolve().parent
+                / "fixtures/runs/mini-c9c77efac7e0/20260822-063506-690137")
+
+
+def _copy_run(td):
+    dst = pathlib.Path(td) / _SHIPPED_RUN.name
+    _sh7.copytree(_SHIPPED_RUN, dst)
+    return dst
+
+
+with section("7.1 a failed rebuttal whose file exists is reported"):
+    with tempfile.TemporaryDirectory() as t1:
+        d = _copy_run(t1)
+        base = pt.problems(pt.load(d), d)
+        check("7.1 the shipped run is silent about rebuttals (positive control)",
+              [p for p in base if "rebuttal" in p], [])
+        r = pt.load(d)
+        r["phases"]["rebuttal"]["codex"].update({"status": "harness", "note": "broken pipe"})
+        (d / "run.json").write_text(json.dumps(r), encoding="utf-8")
+        got = [p for p in pt.problems(pt.load(d), d) if p not in base]
+        check("7.1 the failed rebuttal is named, with its status and note",
+              any("codex" in p and "rebuttal" in p and "harness" in p and "broken pipe" in p
+                  for p in got), True)
+        check("7.1 only that one", len(got), 1)
+
+with section("7.2 a failed synthesis whose panel.md exists is reported"):
+    with tempfile.TemporaryDirectory() as t1:
+        d = _copy_run(t1)
+        base = pt.problems(pt.load(d), d)
+        r = pt.load(d)
+        r["synthesize"] = "codex"
+        r["phases"]["synthesis"] = {"name": "codex", "status": "harness", "secs": 1.0,
+                                    "cost": None, "billing": None,
+                                    "tokens": {"input": None, "output": None}, "note": "exit 1"}
+        (d / "run.json").write_text(json.dumps(r), encoding="utf-8")
+        check("7.2 panel.md is there (that was the whole problem)", (d / "panel.md").is_file(), True)
+        got = [p for p in pt.problems(pt.load(d), d) if p not in base]
+        check("7.2 the failed synthesis is named",
+              any("synthes" in p and "codex" in p and "harness" in p for p in got), True)
+        # POSITIVE CONTROLS: a synthesis that succeeded, and one legitimately skipped
+        # (fewer than two answered -> record is null), stay silent.
+        r["phases"]["synthesis"]["status"] = "ok"
+        (d / "run.json").write_text(json.dumps(r), encoding="utf-8")
+        check("7.2 status ok -> silent", [p for p in pt.problems(pt.load(d), d) if p not in base], [])
+        r["phases"]["synthesis"] = None
+        (d / "run.json").write_text(json.dumps(r), encoding="utf-8")
+        check("7.2 skipped (null record) -> silent",
+              [p for p in pt.problems(pt.load(d), d) if p not in base], [])
+        check("7.2 and an ABSENT panel.md is still reported",
+              ((d / "panel.md").unlink(),
+               any("panel.md is absent" in p for p in pt.problems(pt.load(d), d)))[1], True)
+
 print(f"\nFAILED ({len(FAILED)} of {COUNT} failing)" if FAILED else f"\nall {COUNT} controls green")
 for f in FAILED:
     print("  -", f)

@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+An audit by the new `astra` judge (one turn, 13 minutes, over the tree at `98db692`)
+found 18 defects that three earlier audits had not. Every one below was verified against
+the source, given a control that failed on the old code for the stated reason, and fixed
+at the mechanism. 91 new controls, 1082 across the seven suites.
+
+- **Two ways past the trust gates.** `--check` launched every judge before either gate
+  ran, so `--check` in a tree carrying an opencode plugin or claude hooks ran them; and the
+  claude gate consulted the judges alone where the opencode gate already included the
+  synthesizer, so `--synthesize claude-opus` ran a hostile tree's hooks. Both gates now
+  live in one `enforce_trust()` that anything launching a judge calls first.
+- **A codex child no longer inherits `ANTHROPIC_API_KEY`.** 0.1.2 promised each child
+  sees only its own transport's keys; this one was stripped for claude alone.
+- **A codex judge's tokens are recorded.** `codex exec --json` ends every turn with a
+  `turn.completed` usage event the transport never read, so every codex row in every
+  run.json — the AACR benchmarks included — said 0 in / 0 out, and Astra's own audit run
+  printed UNMEASURED for the judge that had just spent 13 minutes of plan quota.
+- `--thread` turn files are 0600 under a 0700 directory; they took the umask before, so
+  every attached diff sat 0644 for other local users. And `--thread` refuses, naming
+  `XDG_CACHE_HOME`, when the only cache outside the reviewed tree is a per-run temp dir
+  (`--cwd $HOME`), instead of starting a fresh conversation every turn.
+- `--diff` never lists `.llm-panel-material/` as a new file, so a concurrent panel's
+  spilled prompt is not sent to this panel's providers.
+- `--stream` echoes are stripped of terminal escapes like the final review is, and
+  `strip_ansi` now removes OSC sequences (OSC 52 writes the clipboard) as well as CSI.
+- A dribbling ollama or OpenRouter peer cannot outlive `--timeout`: the deadline was
+  checked between lines, and a socket timeout resets per byte, so a peer sending one byte
+  at a time held the judge indefinitely. Reads are now one buffered chunk at a time, each
+  bounded by what is left of the deadline.
+- `--usage` gives up at its deadline even when the `codex` launcher has exited and its
+  child still holds the pipes; the watchdog used to stand down the moment the launcher
+  was gone.
+- `panel-report`: a harness error is no longer counted as an answer ("5 of 5 answered"
+  above "5 did not answer"); billed, quota and token totals include the rebuttal and
+  synthesis phases the label already claimed; the synthesis shown is the LAST heading in
+  panel.md, so a review containing that heading cannot spoof it; the default report name
+  keeps the run directory's PID, so two runs in one second no longer overwrite; two-letter
+  reviewer tags (`AA1`) past 26 judges parse.
+- `panel-triage` reports a rebuttal or synthesis that FAILED, not only one whose file is
+  missing.
+- `recall/aacr-upstream` no longer merges a fragment across a judge boundary: judge B's
+  first observation with an unresolvable path was glued onto judge A's last finding and
+  took A's location. Fixing that exposed a second: a judge's opening bare header with no
+  location carried its empty location over the body's real one, so the finding was
+  withheld. Offline re-conversion of the committed runs: 4 of 54 instances each recover
+  one located finding (`results-0.1.4-3judge` positives 126 → 129,
+  `results-clean-3judge` negatives 46 → 47). **The committed scores were produced by the
+  old bridge and are not re-scored**; the recovered findings are inside the stated noise
+  floor, and a re-score needs the paid evaluator.
+- `recall/aacr-score` resolves its three path arguments before it changes directory into
+  the upstream evaluator, so relative arguments mean the caller's directory.
 - **An opencode judge's token line now counts what the provider billed.** opencode reports
   `tokens: {input, output, reasoning, cache: {write, read}}` per step and the panel summed
   only the first two, so a `gpt-6-astra` call that wrote 8,890 tokens of opencode's own

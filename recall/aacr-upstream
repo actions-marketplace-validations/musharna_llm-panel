@@ -331,11 +331,27 @@ def merge_fragments(obs, paths):
       "similar" to a reference about const-ref parameters. One of the 13 published
       semantic matches was that. A header belongs to what FOLLOWS it, and takes the
       finding's declared location with it. (codex, from scores/clean-pos.json)
+
+    AND ONE BOUNDARY, found by astra, 2026-09-06: `obs` is ONE list pooled across every
+    judge in the run (read_run appends each review's observations in roster order). Both
+    rules above say "the finding before it" -- but a fragment can only belong to what
+    preceded it in the SAME review. Merging across judges glued judge B's first
+    unresolvable observation onto judge A's last finding: it took A's file:line and B's
+    independently matchable claim disappeared. Neither rule crosses a `judge` boundary.
+
+    Second order of the same fix: a review that OPENS with a bare unlocated header
+    (`## Defects Found`, `## DEFECT`) used to have that header absorbed backward across
+    the boundary. Standing, it merges forward -- and the header rule carried its EMPTY
+    location over the body's real one, withholding a located finding. A header's location
+    wins only when the diff CONFIRMS it; otherwise the body's location stands.
     """
+    def same_judge(x, y):
+        return x.get("judge") == y.get("judge")
+
     out = []
     for o in obs:
         resolved, why = resolve_path((o.get("location") or {}).get("path"), paths)
-        if out and not resolved and why != "ambiguous":
+        if out and not resolved and why != "ambiguous" and same_judge(out[-1], o):
             prev = out[-1]
             prev["verbatim"] = prev["verbatim"] + o["verbatim"]
             prev.setdefault("merged_from", []).append(o["observation_id"])
@@ -347,8 +363,12 @@ def merge_fragments(obs, paths):
     i = len(out) - 2
     while i >= 0:
         head, nxt = out[i], out[i + 1]
-        if _BARE.match(head["verbatim"].strip()) and not _BARE.match(nxt["verbatim"].strip()):
+        if (same_judge(head, nxt) and _BARE.match(head["verbatim"].strip())
+                and not _BARE.match(nxt["verbatim"].strip())):
             merged = dict(head)
+            hres, _ = resolve_path((head.get("location") or {}).get("path"), paths)
+            if not hres:
+                merged["location"] = nxt.get("location") or {}
             merged["verbatim"] = head["verbatim"] + nxt["verbatim"]
             merged["merged_from"] = (head.get("merged_from", []) + [nxt["observation_id"]]
                                      + nxt.get("merged_from", []))
