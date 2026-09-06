@@ -1,6 +1,7 @@
 #!/usr/bin/env Rscript
 # AACR-Bench prompt-style results as a precision/recall plane. Numbers are the README
-# table (extractor-3 re-measurements, 18 PRs, 2026-08-28); the recall error bar is the
+# table, 18 PRs: defect is the shipped prompt measured at e2ad666 (2026-09-06), broad and
+# volume are extractor-3 re-measurements from 2026-08-28. The recall error bar is the
 # measured re-run floor: +-3 of 150 reference matches = +-2.0 pp.
 #
 #   Rscript docs/bench_chart.R [outdir]     # writes bench-light.png and bench-dark.png
@@ -13,9 +14,9 @@ FLOOR <- 2.0  # pp, recall
 
 arms <- data.frame(
   name      = c("defect", "broad", "volume"),
-  recall    = c(12.2, 26.0, 25.2),
-  precision = c(16.5, 13.2, 7.9),
-  reads     = c(6.1, 7.6, 12.6),
+  recall    = c(9.8, 26.0, 25.2),
+  precision = c(9.5, 13.2, 7.9),
+  reads     = c(10.5, 7.6, 12.6),
   stringsAsFactors = FALSE
 )
 arms$name <- factor(arms$name, levels = arms$name)

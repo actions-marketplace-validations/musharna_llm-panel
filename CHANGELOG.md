@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The README's default-prompt numbers were measured with a prompt that no longer
+  exists.** The `defect` row quoted 12.2% recall / 16.5% precision from a run that started
+  three and a half hours before the prompt was rewritten (`06f6f0d`). The shipped prompt,
+  re-measured on the same 18 PRs at `e2ad666`, reads **9.8% recall / 9.5% precision, 10.5
+  findings per validated hit** (`recall/benchmarks/results-0.1.4-3judge/`). Recall itself
+  did not move — paired on the same 123 references, McNemar p = 0.51 — the rewrite bought
+  volume (91 → 126 findings) and precision paid for it. README table, the location-vs-
+  semantic figures, and `docs/bench_chart.R` all corrected; the `broad` and `volume` rows
+  were already post-rewrite and are unchanged.
 - `recall/aacr-run.sh` takes an optional third argument, the number of instances per leg,
   so a one-instance dry run exists. Measured 2026-09-05 with live judges: both legs wrote
   their result files, and a failing leg aborts the script instead of printing ALL PANELS

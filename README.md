@@ -282,11 +282,13 @@ running the panel over [AACR-Bench](https://github.com/alibaba/aacr-bench) PRs a
 scoring the findings with **upstream's own evaluator** — a real LLM judge doing
 path → line → semantic matching, so the numbers are theirs, not a self-graded matcher's.
 The prompt style is a flag of that harness, `recall/aacr-upstream --prompt-style`, not of
-`llm-panel`. On 18 PRs at full roster (extractor-3 re-measurements, 2026-08-28):
+`llm-panel`. On 18 PRs at full roster. The default row is the shipped prompt measured at
+`e2ad666` (2026-09-06, `recall/benchmarks/results-0.1.4-3judge/`); the other two are
+extractor-3 re-measurements from 2026-08-28:
 
 | `--prompt-style`   | semantic recall | precision | findings read per validated hit |
 | ------------------ | --------------- | --------- | ------------------------------- |
-| `defect` (default) | 12.2%           | 16.5%     | 6.1                             |
+| `defect` (default) | 9.8%            | 9.5%      | 10.5                            |
 | `broad`            | 26.0%           | 13.2%     | 7.6                             |
 | `volume`           | 25.2%           | 7.9%      | 12.6                            |
 
@@ -295,8 +297,9 @@ The prompt style is a flag of that harness, `recall/aacr-upstream --prompt-style
   <img alt="recall against precision for the three prompt styles; error bars are the ±2 pp re-run noise floor" src="https://raw.githubusercontent.com/musharna/llm-panel/main/docs/bench-light.png" width="660">
 </picture>
 
-`broad` — asking for what a careful maintainer would actually raise — doubles the
-default's recall (McNemar on paired references, p = 0.0005). But the `volume` control
+`broad` — asking for what a careful maintainer would actually raise — doubles the recall
+of the `defect` arm it was paired against (McNemar on paired references, p = 0.0005; that
+arm was the pre-rewrite prompt at 12.2%, not the row above). But the `volume` control
 shows what that class of gain is made of: it is the `defect` prompt plus one
 exhaustiveness clause, reaches the same recall (p = 1.0 vs broad), and pays for it with
 half of broad's precision. On a 35-PR replication the ordering holds on both transports
@@ -315,8 +318,8 @@ Three things to know before quoting any of it:
   split (the classifier was circular), "broad finds different hits" (pre-registered
   replication on 35 fresh PRs, p = 0.40), and a transport effect that did not survive a
   re-run. Nothing above rests on a withdrawn claim.
-- **Location agreement overstates semantic agreement ~2x** (22.8% of references had a
-  finding at the right file and line; 12.2% had one a judge called the same concern) —
+- **Location agreement overstates semantic agreement ~2.5x** (25.2% of references had a
+  finding at the right file and line; 9.8% had one a judge called the same concern) —
   which is why scoring is delegated upstream instead of done by a local matcher.
 
 The rest — the repo-checkout arm, what a degraded roster costs, accepted-vs-rejected
