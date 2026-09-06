@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 — 2026-09-06
 
-An audit by the new `astra` judge (one turn, 13 minutes, over the tree at `98db692`)
+The release that was going to be documentation only became a defect release the same
+afternoon. An audit by the new `astra` judge (one turn, 13 minutes, over the tree at `98db692`)
 found 18 defects that three earlier audits had not. Every one below was verified against
 the source, given a control that failed on the old code for the stated reason, and fixed
 at the mechanism. 91 new controls, 1082 across the seven suites.
@@ -63,11 +64,9 @@ at the mechanism. 91 new controls, 1082 across the seven suites.
   it for a single hard question) and `or-astra` metered through OpenRouter ($10/M in,
   $50/M out, plus the ~$0.11 of cached opencode prompt every call pays first).
 
-## 0.1.5 — 2026-09-06
-
-A documentation and benchmark release, like 0.1.3: no tool behaviour changes. It exists
-because the PyPI page renders the README it was uploaded with, and the 0.1.4 README quoted
-benchmark numbers from a prompt that was already gone.
+Also in this release, from before the audit. The PyPI page renders the README it was
+uploaded with, and the 0.1.4 README quoted benchmark numbers from a prompt that was
+already gone:
 
 - **The README's default-prompt numbers were measured with a prompt that no longer
   exists.** The `defect` row quoted 12.2% recall / 16.5% precision from a run that started
