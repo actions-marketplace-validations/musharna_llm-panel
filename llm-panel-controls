@@ -2191,6 +2191,12 @@ with section("27.1 a panel no judge can run is refused with the setup in one sen
           "roster.json" in _p.stderr and "--check" in _p.stderr, True)
     check("27.1 and does not print the per-judge warnings on top",
           "will report a transport failure" in _p.stderr, False)
+    # Trust before availability: CI, which has no `claude`, saw exit 14 beat the claude
+    # gate's exit 9 on control 25.3's hostile tree. Same bare PATH, hostile tree: 9.
+    _p = _sp26.run([sys.executable, str(SRC), "q", "--cwd", str(_repo26(**_HAZ)), "--judges", "claude-opus"],
+                   capture_output=True, text=True, timeout=120, env=_bare)
+    check("27.1 a hostile tree is refused (9) before 'no judge can run' (14)",
+          _p.returncode == 9 and "carries claude configuration" in _p.stderr, True)
     _p = _sp26.run([sys.executable, str(SRC), "q", "--cwd", str(_r), "--judges", "local-small",
                     "--timeout", "5"],
                    capture_output=True, text=True, timeout=120,

@@ -2850,7 +2850,11 @@ def enforce_trust(judges, synth, repo, agent, unsafe_agent):
     # clear the same bar. The guard used to consult `judges` only, so
     # `--judges codex --synthesize big-pickle --agent build` skipped it entirely.
     if any(ROSTER[j][0] == "opencode" for j in everyone):
-        writable = agent_can_write(agent, repo)
+        # The agent definition matters only where opencode can run; on a machine without
+        # it the refusal that follows (exit 14, no judge can run) is the useful one, not
+        # "agent 'panelist' is not defined in your opencode config" for a CLI that is not
+        # installed. The tree's own hazards below are checked regardless.
+        writable = agent_can_write(agent, repo) if shutil.which(BINARY["opencode"]) else False
         if writable is not False and not unsafe_agent:
             why = ("it is not defined in your opencode config" if writable is None
                    else "its config enables at least one tool that is not read-only "
@@ -3237,6 +3241,11 @@ def main():
     # cancelled the whole panel before Codex was ever asked -- and ollama judges
     # were refused for want of a CLI this program no longer uses (it speaks HTTP).
     # ask() reports a missing transport as that judge's `harness` failure instead.
+    # Trust before availability: a tree carrying configuration the judges would run is
+    # refused (exit 9) whether or not the judges' CLIs are installed here. CI, which has
+    # no `claude`, found the 14 below firing first on control 25.3's hostile tree.
+    enforce_trust(judges, a.synthesize, repo, a.agent, a.unsafe_agent)
+
     _dead = [j for j in judges
              if ROSTER[j][0] in BINARY and not shutil.which(BINARY[ROSTER[j][0]])]
     if _dead and len(_dead) == len(judges):
@@ -3254,8 +3263,6 @@ def main():
     for j in _dead:
         sys.stderr.write(f"llm-panel: `{BINARY[ROSTER[j][0]]}` is not on PATH, so {j} will "
                          f"report a transport failure; the other judges still run\n")
-
-    enforce_trust(judges, a.synthesize, repo, a.agent, a.unsafe_agent)
 
     # Snapshot the tree BEFORE any judge runs. The config guard above is advisory -- it
     # cannot see `OPENCODE_CONFIG_CONTENT`, tool defaults for names it does not enumerate,
