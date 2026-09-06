@@ -1019,6 +1019,27 @@ with section("kimi.6 a recovered body is marked incomplete, never ok"):
     check("kimi.6 recovered text is not passed off as a clean answer",
           _r["status"], "incomplete")
 
+# Measured 2026-09-06 on openrouter/openai/gpt-6-astra: opencode reported
+# tokens {input: 3, output: 7, reasoning: 0, cache: {write: 8890, read: 0}} and cost
+# $0.1115 for a 13-token question. The panel printed "3 in / 7 out, $0.1115": the 8,890
+# prompt tokens opencode wrote to the provider's cache (its own system prompt and tool
+# schemas) were dropped, so the token line and the dollar line disagreed by 3000x.
+# Every prompt token the provider billed is input, cached or not; reasoning is output.
+_CACHED = [{"type": "text", "part": {"type": "text", "text": "PROBE OK"}},
+           {"type": "step_finish",
+            "part": {"reason": "stop", "cost": 0.111505,
+                     "tokens": {"total": 8905, "input": 3, "output": 7, "reasoning": 5,
+                                "cache": {"write": 8890, "read": 0}}}}]
+
+with section("kimi.7 cached prompt tokens and reasoning tokens are counted"):
+    _r = _ask_stub(_CACHED)
+    check("kimi.7 input counts what the provider billed, cache included",
+          (_r["meta"].get("tokens") or {}).get("input"), 8893)
+    check("kimi.7 output includes reasoning tokens",
+          (_r["meta"].get("tokens") or {}).get("output"), 12)
+    check("kimi.7 positive control: plain input/output still summed",
+          (_ask_stub(_LENGTH)["meta"].get("tokens") or {}).get("output"), 9000)
+
 # --- roster config ------------------------------------------------------------------
 # The built-in ROSTER names one person's accounts. Making it config-driven is what lets
 # anyone else run this, so the loader gets controls on BOTH halves: that a good config

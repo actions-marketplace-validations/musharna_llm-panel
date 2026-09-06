@@ -58,7 +58,7 @@ citation-overlap tables show where the panel's attention landed (three judges re
 | `recall/aacr-upstream` | runs the panel over AACR-Bench PRs and hands the findings to **upstream's** evaluator  |
 | `recall/aacr-score`    | invokes that evaluator, and refuses to report a number from a judge that isn't running |
 | `claimlib.py`          | the one measurement boundary: reviews → span-grounded observations                     |
-| `*-controls`           | the regression suites — 988 controls, every one tied to a defect that shipped          |
+| `*-controls`           | the regression suites — 991 controls, every one tied to a defect that shipped          |
 
 ## Install
 

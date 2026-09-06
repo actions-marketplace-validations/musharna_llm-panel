@@ -72,6 +72,14 @@ __version__ = "0.1.5"
 # name -> (kind, model-id).  kind: "codex" uses the ChatGPT plan; "opencode" uses opencode run.
 ROSTER = {
     "codex":       ("codex",    "gpt-5.6-sol"),
+    # GPT-6 Astra on the same ChatGPT plan. OPT-IN, never in DEFAULT: one Astra turn
+    # spends a large share of the plan's weekly window (measured 2026-09-06: one
+    # 13-token probe billed 3,346 tokens), so reserve it for a single hard question,
+    # not a benchmark leg. Needs codex-cli >= 0.153.0 -- older CLIs refuse with
+    # "requires a newer version of Codex", which is a version wall, not an
+    # entitlement one. `gpt-6-astra-pro` IS entitlement-refused on Plus. Metered
+    # alternative below: `or-astra`.
+    "astra":       ("codex",    "gpt-6-astra"),
     "big-pickle":  ("opencode", "opencode/big-pickle"),
     "nemotron":    ("opencode", "opencode/nemotron-3-ultra-free"),
     "lightning":   ("opencode", "opencode/nemotron-3.5-lightning-free"),
@@ -95,6 +103,12 @@ ROSTER = {
     "or-kimi":     ("opencode", "openrouter/moonshotai/kimi-k3"),
     "or-qwen":     ("opencode", "openrouter/qwen/qwen3-235b-a22b-thinking-2507"),
     "or-deepseek": ("opencode", "openrouter/deepseek/deepseek-v3.2"),
+    # Astra billed by the token instead of the plan: $10/M in, $50/M out (2026-09-06).
+    # Every opencode call first writes ~8.9k tokens of opencode's own system prompt and
+    # tool schemas to the provider cache, $0.11 before the question arrives (measured:
+    # a 13-token question cost $0.1115), so budget $6-8 for a 27-instance AACR leg, not
+    # the $2 the diff bytes alone suggest. Use when `astra` would eat the week's quota.
+    "or-astra":    ("opencode", "openrouter/openai/gpt-6-astra"),
     # --- Anthropic through the `claude` CLI, which uses the claude.ai SUBSCRIPTION
     # rather than metered API billing -- the same arrangement as the codex judge on
     # ChatGPT Plus. Verified: with ANTHROPIC_API_KEY unset the CLI answers on the
@@ -1673,9 +1687,17 @@ def _ask(name, prompt, repo, timeout, agent="panelist", session_file=None,
                 # reported "858 in / 8741 out" for a run that had just read a whole repo.
                 # Sum instead: every step is a separate billed call.
                 if isinstance(part.get("tokens"), dict):
+                    # Count what the provider billed, not just opencode's headline
+                    # pair. Measured 2026-09-06 on gpt-6-astra: {input: 3, output: 7,
+                    # cache: {write: 8890}} at $0.1115 -- the 8,890 tokens opencode
+                    # wrote to the cache (its system prompt and tool schemas) are the
+                    # whole prompt, and reasoning tokens are billed as output.
+                    pt = part["tokens"]
+                    cache = pt.get("cache") if isinstance(pt.get("cache"), dict) else {}
                     tot = meta.setdefault("tokens", {"input": 0, "output": 0})
-                    for k in ("input", "output"):
-                        tot[k] += part["tokens"].get(k) or 0
+                    tot["input"] += ((pt.get("input") or 0) + (cache.get("write") or 0)
+                                     + (cache.get("read") or 0))
+                    tot["output"] += (pt.get("output") or 0) + (pt.get("reasoning") or 0)
                     meta["steps"] = meta.get("steps", 0) + 1
                 if part.get("cost") is not None:
                     meta["cost"] = meta.get("cost", 0) + part["cost"]

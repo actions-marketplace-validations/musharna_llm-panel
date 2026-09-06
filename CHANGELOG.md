@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **An opencode judge's token line now counts what the provider billed.** opencode reports
+  `tokens: {input, output, reasoning, cache: {write, read}}` per step and the panel summed
+  only the first two, so a `gpt-6-astra` call that wrote 8,890 tokens of opencode's own
+  system prompt and tool schemas to the cache printed "3 in / 7 out, $0.1115" — the token
+  line and the dollar line disagreed by 3000x. Cached prompt tokens are input, reasoning
+  tokens are output. Measured live before and after; control `kimi.7`.
+- Two opt-in GPT-6 Astra judges, neither in the default roster: `astra` on the ChatGPT
+  plan (codex-cli ≥ 0.153.0; one turn is a large share of a Plus weekly window, so keep
+  it for a single hard question) and `or-astra` metered through OpenRouter ($10/M in,
+  $50/M out, plus the ~$0.11 of cached opencode prompt every call pays first).
+
 ## 0.1.5 — 2026-09-06
 
 A documentation and benchmark release, like 0.1.3: no tool behaviour changes. It exists
