@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 — 2026-09-06
+
+A documentation and benchmark release, like 0.1.3: no tool behaviour changes. It exists
+because the PyPI page renders the README it was uploaded with, and the 0.1.4 README quoted
+benchmark numbers from a prompt that was already gone.
 
 - **The README's default-prompt numbers were measured with a prompt that no longer
   exists.** The `defect` row quoted 12.2% recall / 16.5% precision from a run that started
@@ -15,6 +19,9 @@
   so a one-instance dry run exists. Measured 2026-09-05 with live judges: both legs wrote
   their result files, and a failing leg aborts the script instead of printing ALL PANELS
   DONE.
+- `--usage` and `--reset-usage` re-verified against codex-cli 0.153.4 (the version that
+  first serves `gpt-6-astra` on a ChatGPT plan): same JSON-RPC methods, same output. A
+  third audit of the tree at `b2ac8c3` found nothing to fix; all 988 controls green.
 
 ## 0.1.4 — 2026-09-04
 
