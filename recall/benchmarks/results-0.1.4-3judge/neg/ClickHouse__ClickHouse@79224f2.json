@@ -1,0 +1,89 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp:251** \u2014 If a batch is `[A, B]`, `A` is rejected by `prepareSetProcessingRequests()` and `B` succeeds, `new_batch` becomes `[B]` while `file_metadatas` remains `[metadata(A), metadata(B)]`. The iterator then processes object `B` using `A`\u2019s metadata, causing the wrong file to be finalized or a metadata/path mismatch failure.",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp",
+        "start_line": 251,
+        "end_line": 251,
+        "observation_id": "f6225d14ebef6887",
+        "claimed_path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. ObjectStorageQueueIFileMetadata.cpp:265-291 \u2014 the new guard is TOCTOU-racy and does not prevent the race it was written for**\nThe `std::unique_lock` is declared and acquired inside `prepareSetProcessingRequests` (lines 265-266) and is destroyed at the function's return (line 291, and at the two `return std::nullopt` paths). The lock therefore covers only the state read (line 274) and request construction. The caller then executes the requests and transitions the file to `Processing` only later (`ObjectStorageQueueSource.cpp:211-216` performs the keeper `multi`; the responses are consumed at 217+). Concrete failure: two S3Queue tables on the same server watching the same keeper path, one unprocessed file F. Table A calls `prepareSetProcessingRequests(F)` (lock taken, state read as `NotProcessed`, create-node request appended) and returns, releasing the lock at line 291. Table B's `prepareSetProcessingRequests(F)` runs while A's keeper `multi` is still in flight (round trip, milliseconds) \u2014 this is the *typical* timing for two tables polling the same list. B's `try_lock()` succeeds (line 266) and the state read at line 274 still returns `NotProcessed`, so B appends its own create-node request. Both multis execute; one create fails with `NODE_EXISTS` and the loser's per-file/batch error handling fires \u2014 the exact contention the change's own comments (lines 268-270, 284-286) claim to handle. The nullopt path can only ever trigger in the sub-millisecond window where the two `prepare` calls overlap, so the guard fires almost never and the conflict the PR targets still occurs.",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp",
+        "start_line": 265,
+        "end_line": 265,
+        "observation_id": "282a039b30592c35",
+        "claimed_path": "ObjectStorageQueueIFileMetadata.cpp",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**2. ObjectStorageQueueSource.cpp:192-208, 236-251 \u2014 all-nullopt batches produce a keeper poll spin and leave unclaimed metadata**\nIf every object in a fetched batch returns nullopt (all files currently owned by the co-processing table, lines 199-208), `new_batch` becomes all nullptrs, `requests` stays empty (line 191), and the shrink at 239-251 reduces `new_batch` to an empty vector. Nothing in the visible code stops the outer batch loop from immediately re-fetching the identical keeper list (the files are still listed and still `Processing`), re-dropping every one of them, and repeating \u2014 a tight loop of keeper list fetches plus empty-requests `multi` calls that lasts as long as the other table holds the files. Additionally, `file_metadatas[i]` was already created for each dropped object (line 196) and is only cleared inside the success branch (line 237); for any non-success flow, the dropped entries' metadata is indistinguishable from prepared entries' metadata, so failure-path handling that iterates `file_metadatas` (reset/retry) operates on files this table never claimed. If either table crashes after creating a processing node, the guard at lines 275-288 also drops those files silently and permanently \u2014 no error is ever emitted (both messages for this path are `LOG_TEST`-only).",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp",
+        "start_line": 192,
+        "end_line": 192,
+        "observation_id": "3a931eb7c0380839",
+        "claimed_path": "ObjectStorageQueueSource.cpp",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**3. ObjectStorageQueueSource.cpp:217 \u2014 the success log count is wrong**\n`LOG_TEST(log, \"Successfully set {} files as processing\", new_batch.size())` is emitted before the shrink and still counts the nulled entries, so for a batch with k dropped objects it logs \"Successfully set N files as processing\" when only N\u2212k were set \u2014 in the all-nullopt case it logs \"Successfully set N files as processing\" while zero files were set. Test-build diagnostics report a value that no longer corresponds to anything that happened.",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp",
+        "start_line": 217,
+        "end_line": 217,
+        "observation_id": "4d623c7bf004fee1",
+        "claimed_path": "ObjectStorageQueueSource.cpp",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**4. ObjectStorageQueueIFileMetadata.cpp:284-286 \u2014 the second log message asserts a false cause**\nThe branch taken at lines 275-288 covers three distinct states: `Processing`, `Processed`, and `Failed` with retries exhausted. The unconditional message at line 286 claims the file \"is being processed on this server by another table\" for all of them, but for `Processed` and `Failed`-exhausted states no table is processing the file \u2014 the message misattributes the skip when debugging the exact two-table scenario this change targets (and duplicates \"on this server\" \u2014 lines 270 and 286 both contain \"on this server ... on this server\").",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp",
+        "start_line": 284,
+        "end_line": 284,
+        "observation_id": "951133c73ad6a18f",
+        "claimed_path": "ObjectStorageQueueIFileMetadata.cpp",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 1: Race condition \u2014 lock released before state transition executes**  \n**File:** `src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp` (hunk `@@ -259,15 +259,33 @@`)  \nThe `processing_lock` is held only during request *preparation* (`prepareProcessingRequestsImpl`). The actual state change to `Processing` happens later when the caller executes the Keeper `multi()` request (`ObjectStorageQueueSource.cpp:203`). Two threads can both acquire the lock sequentially, see `state != Processing`, both prepare `Set` requests for the same file, and both succeed \u2014 causing duplicate processing.  \n**Failure scenario:** Thread A acquires lock, prepares Set(Processing), releases lock. Thread B acquires lock, sees state still `New` (A's request not executed yet), prepares another Set(Processing). Both requests execute; file processed twice.",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp",
+        "start_line": 259,
+        "end_line": 259,
+        "observation_id": "b222cbbb96ce42f4",
+        "claimed_path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 2: Misleading log message for non-Processing states**  \n**File:** `src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp` (hunk `@@ -259,15 +259,33 @@`, second `LOG_TEST` in the `if` block)  \nThe log `\"File {} is being processed on this server by another table on this server\"` is emitted for **all** non-processable states (`Processing`, `Processed`, `Failed` with max retries). For `Processed` or `Failed` the file is *not* being processed by another table \u2014 it\u2019s already done or dead. This misleads debugging.  \n**Failure scenario:** File hits max retries \u2192 state=`Failed`. Log claims another table is processing it. Operator wastes time investigating phantom contention.",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp",
+        "start_line": 259,
+        "end_line": 259,
+        "observation_id": "2a87adf70e603033",
+        "claimed_path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueIFileMetadata.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 3: Files silently dropped under lock contention with no retry in current batch**  \n**File:** `src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp` (hunk `@@ -187,13 +189,24 @@`)  \nWhen `prepareSetProcessingRequests` returns `std::nullopt` (lock busy or bad state), the file is nulled out and compacted away (`new_batch[i] = nullptr` \u2192 later filtered). The file is not retried in this `next()` call, nor re-queued \u2014 it waits for the next listing cycle.  \n**Failure scenario:** High contention on a hot file. Thread A holds lock for 50ms preparing requests. Thread B tries, fails `try_lock()`, drops file. File sits unprocessed until next directory listing (minutes/hours). Starvation under sustained contention.",
+        "path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp",
+        "start_line": 189,
+        "end_line": 189,
+        "observation_id": "fa1f10fb617fb2af",
+        "claimed_path": "src/Storages/ObjectStorageQueue/ObjectStorageQueueSource.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-4e0swnq9-52f427435099/20260905-234500-3977970",
+  "extractor": "3",
+  "unlocated": []
+}

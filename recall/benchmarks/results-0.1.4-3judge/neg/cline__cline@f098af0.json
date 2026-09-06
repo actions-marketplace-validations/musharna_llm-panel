@@ -1,0 +1,161 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **High \u2014 `src/integrations/terminal/TerminalProcess.ts:198` and `:229`:** `getLatestTerminalOutput()` is called outside the error handling already provided by `returnCurrentTerminalContents()`. If terminal capture throws\u2014for example, the clipboard command is unavailable\u2014running a silent command such as `true`, or any command without shell integration, exits before `completed`/`continue` is emitted, leaving the caller waiting indefinitely.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 198,
+        "end_line": 198,
+        "observation_id": "18f82027d1eb8fbf",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **Medium \u2014 `src/integrations/terminal/TerminalProcess.ts:195`:** Empty output is reported as `TIMEOUT`, although no timeout occurred. A successful silent command such as `mkdir new-dir` ends with `fullOutput === \"\"` and records a timeout failure, corrupting terminal-failure metrics.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 195,
+        "end_line": 195,
+        "observation_id": "04dda1a09119f211",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **Medium \u2014 `src/integrations/terminal/TerminalProcess.ts:229`:** Any nonempty terminal snapshot is treated as successfully captured command output. With no shell integration, a terminal containing old output followed by `sleep 10` still has a nonempty snapshot after three seconds, so telemetry reports successful clipboard capture even though the command has produced no output and remains running.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 229,
+        "end_line": 229,
+        "observation_id": "4b0f3791a7e628b8",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **Low \u2014 `src/core/task/index.ts:1533`:** Every exception from `ask(\"command_output\", ...)` is classified as `STREAM_TIMEOUT`. If the user aborts the task or the webview request fails immediately, the catch records a stream timeout despite no timeout occurring.",
+        "path": "src/core/task/index.ts",
+        "start_line": 1533,
+        "end_line": 1533,
+        "observation_id": "09f5edc879eee402",
+        "claimed_path": "src/core/task/index.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. `getLatestTerminalOutput` is called but never defined or imported \u2014 `src/integrations/terminal/TerminalProcess.ts`, hunk `@@ -189,7 +191,19 @@` (~new line 197) and hunk `@@ -203,6 +217,13 @@` (~new line 227)**\nThe only import this PR adds to the file is `import { TerminalOutputFailureReason, telemetryService } from \"@services/telemetry\"` (line 1). The diff introduces two `const terminalSnapshot = await getLatestTerminalOutput()` calls and shows no definition or import of that function anywhere (contrast `returnCurrentTerminalContents`, which is pre-existing). Failure scenario: any code path that triggers the fallback \u2014 a shell-integration stream that timed out, or any command in a non-integrated terminal \u2014 calls an undefined identifier; at minimum this is an unresolved-reference build error (TS2304) unless the symbol happens to pre-exist in the file, which I could not check (empty tree). This is also the only defect here that can break the build entirely.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 197,
+        "end_line": 197,
+        "observation_id": "6da95a1f9e787182",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. Every `ask` failure is mislabeled as `STREAM_TIMEOUT` \u2014 `src/core/task/index.ts`, hunk `@@ -1517,7 +1530,13 @@` (new line ~1532)**\n`} catch { Logger.error(...); telemetryService.captureTerminalHang(TerminalHangStage.STREAM_TIMEOUT) }` runs for *any* rejection of `this.ask(\"command_output\", chunk)` \u2014 user clicking a non-proceed button, a cancelled request, an API/provider error \u2014 not only a timeout. Failure scenario: user cancels the output prompt (inputs: cancel \u2192 error thrown) \u2192 telemetry records `terminal_hang/stream_timeout`, so the stream-timeout metric is really \"ask threw for any reason,\" and after a 30s `BUFFER_STUCK` fire followed by an at-31s error you get two hang events for one instance.",
+        "path": "src/core/task/index.ts",
+        "start_line": 1532,
+        "end_line": 1532,
+        "observation_id": "cdbf964c6e822b1e",
+        "claimed_path": "src/core/task/index.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. Legitimate empty-output commands are recorded as output failures \u2014 `src/integrations/terminal/TerminalProcess.ts`, hunk `@@ -189,7 +191,19 @@` (new lines ~193-194)**\n`if (!this.fullOutput.trim())` is true whenever the command produced no stdout, which includes successful, fast, silent commands (`cd`, `mkdir -p`, `touch`, quiet `git checkout`). The new code then emits `captureTerminalOutputFailure(TerminalOutputFailureReason.TIMEOUT)` and, since the snapshot will also be empty, `captureTerminalExecution(false, \"none\")`. Failure scenario: user runs `touch x` \u2192 shell-integration stream completes normally with zero output \u2192 telemetry records an output \"timeout\" failure plus a failed-execution event for a command that succeeded. The reason enum name (`TIMEOUT`) doesn't match the condition that triggers it (no output).",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 193,
+        "end_line": 193,
+        "observation_id": "a57cb45861fbdd79",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**4. `WAITING_FOR_COMPLETION` false-positive for commands that legitimately run >60s \u2014 `src/core/task/index.ts`, hunk `@@ -1552,8 +1571,24 @@` (new lines ~1575-1582)**\nThe timer fires when `completed` hasn't flipped within the fixed 60s; `completed` only flips when the terminal's `completed` event arrives, which for a long-running command (slow build, test suite, `npm install`) arrives late by design. Failure scenario: a 90-second `pnpm build` \u2192 at 60s telemetry records `terminal_hang/waiting_for_completion` even though execution is healthy and completes at 90s. Combined with #2, the hang dataset becomes mostly false positives, which is the whole point of the PR.",
+        "path": "src/core/task/index.ts",
+        "start_line": 1575,
+        "end_line": 1575,
+        "observation_id": "14591d2c6dcdb58f",
+        "claimed_path": "src/core/task/index.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**5. `completionTimer` is never cleared if `await process` rejects \u2014 `src/core/task/index.ts`, hunk `@@ -1570,6 +1605,12 @@` (new lines ~1607-1612)**\nThe clear only happens after `await process` resolves; if that promise rejects, the function exits and the 60s timer stays armed. Failure scenario: process errors at 5s \u2192 function already returned the error, but at 60s the stale timer fires `captureTerminalHang(WAITING_FOR_COMPLETION)` for a pipeline that died 55s earlier \u2014 a spurious hang event that can't be distinguished from a real one downstream. (This depends on `process` being rejectable, which I couldn't verify.)\n\n**6. `BUFFER_STUCK` fires on normal human/LLM latency \u2014 `src/core/task/index.ts`, hunk `@@ -1503,9 +1507,18 @@` (new lines ~1512-1516)**\nThe 30s timer starts before `this.ask(\"command_output\", chunk)` resolves, and that await is a UI round-trip (user reads output, clicks a button) plus an LLM request. Failure scenario: user takes 35s to review output, or the model takes >30s to respond \u2192 `terminal_hang/buffer_stuck` recorded for a healthy in-flight prompt. The timer is also not cancelled when the ask legitimately takes long, so every slow-but-normal round-trip counts as a hang.\n\nMinor: `TerminalOutputFailureReason.CLIPBOARD_FAILED` is declared (TelemetryService.ts, hunk `@@ -18,6 +18,33 @@`) but never used; and in the no-shell-integration branch (TerminalProcess.ts, hunk `@@ -203,6 +217,13 @@`, new line ~219) every command emits `captureTerminalOutputFailure(NO_SHELL_INTEGRATION)` immediately before emitting `captureTerminalExecution(true, \"clipboard\")` \u2014 contradictory signals for the same successful command, so any consumer summing `TERMINAL_OUTPUT_FAILURE` counts every fallback-terminal command as a failure.",
+        "path": "src/core/task/index.ts",
+        "start_line": 1607,
+        "end_line": 1607,
+        "observation_id": "cfa54442ca6b2284",
+        "claimed_path": "src/core/task/index.ts",
+        "path_resolution": "exact",
+        "merged_from": [
+          "39a075aad5bdcc6e"
+        ]
+      },
+      {
+        "content": "**DEFECT 1 \u2014 src/integrations/terminal/TerminalProcess.ts:1**  \nImport path typo: `from \"@services/telemetry\"` missing `/` after `@`. All other imports in the codebase use `@/services/telemetry` (e.g., Task.ts line 73). This will fail module resolution at runtime/build.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 1,
+        "end_line": 1,
+        "observation_id": "e8828e1ae0923394",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 2 \u2014 src/core/task/index.ts:1552**  \nCompletion timer leaks on process error. `completionTimer` is only cleared in the `\"completed\"` event handler (line 1564) and after `await process` (line 1608). If the process promise rejects (error/abort), neither runs \u2014 the timer is never cleared, leaking a timer reference and potentially firing `WAITING_FOR_COMPLETION` telemetry spuriously after the process is dead.",
+        "path": "src/core/task/index.ts",
+        "start_line": 1552,
+        "end_line": 1552,
+        "observation_id": "352954f6570e7363",
+        "claimed_path": "src/core/task/index.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 3 \u2014 src/integrations/terminal/TerminalProcess.ts:197**  \n`getLatestTerminalOutput()` is called but not imported in the diff. The function is new (not in the old code shown at line 189 `returnCurrentTerminalContents()`). If not already in scope, this throws `ReferenceError` at runtime.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 197,
+        "end_line": 197,
+        "observation_id": "6fbdf5c007534fdf",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 4 \u2014 src/integrations/terminal/TerminalProcess.ts:191-210**  \nNo error handling around `returnCurrentTerminalContents()` and `getLatestTerminalOutput()`. Both are `await`ed but uncaught; any rejection propagates out of the terminal process handler, crashing the command execution flow.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 191,
+        "end_line": 191,
+        "observation_id": "764f9886b8931006",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 5 \u2014 src/integrations/terminal/TerminalProcess.ts:191-210**  \nConfusing telemetry on shell-integration fallback: when shell integration returns empty output, it records `TERMINAL_OUTPUT_FAILURE` with `TIMEOUT` (line 194), then if clipboard fallback succeeds, *also* records `TERMINAL_EXECUTION` success with `\"clipboard\"` (line 198). Same command yields both a failure and a success event, misleading analytics.",
+        "path": "src/integrations/terminal/TerminalProcess.ts",
+        "start_line": 191,
+        "end_line": 191,
+        "observation_id": "7915ff40fb540461",
+        "claimed_path": "src/integrations/terminal/TerminalProcess.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 6 \u2014 src/services/telemetry/TelemetryService.ts:22,32,42**  \nUnused enum values: `TerminalOutputFailureReason.CLIPBOARD_FAILED`, `TerminalUserInterventionAction.MANUAL_PASTE`, `TerminalUserInterventionAction.CANCELLED` are defined but never referenced in the diff. Dead code (not a runtime defect, but indicates incomplete feature or missing instrumentation).",
+        "path": "src/services/telemetry/TelemetryService.ts",
+        "start_line": 22,
+        "end_line": 22,
+        "observation_id": "2c14cb3e9ad87627",
+        "claimed_path": "src/services/telemetry/TelemetryService.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-yz186w6r-e000a7f6346b/20260906-000025-4058276",
+  "extractor": "3",
+  "unlocated": []
+}

@@ -1,0 +1,98 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `core/src/main/java/io/kestra/core/utils/TruthUtils.java:13` \u2014 `isFalsy(null)` returns `false`, even though `isTruthy(null)` also returns `false`. A null-valued assertion can therefore be treated as successful instead of failing.",
+        "path": "core/src/main/java/io/kestra/core/utils/TruthUtils.java",
+        "start_line": 13,
+        "end_line": 13,
+        "observation_id": "5ad0241863dbfb7d",
+        "claimed_path": "core/src/main/java/io/kestra/core/utils/TruthUtils.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `core/src/main/java/io/kestra/plugin/core/execution/Assert.java:89` \u2014 The conditions property is parsed before being rendered. For `conditions: \"{{ vars.assertions }}\"`, where `vars.assertions` is a list, Jackson receives the literal Pebble expression instead of the resolved list and the task fails with a JSON parsing error.",
+        "path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "start_line": 89,
+        "end_line": 89,
+        "observation_id": "3c90a87108a105a9",
+        "claimed_path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `core/src/main/java/io/kestra/plugin/core/execution/Assert.java:53` \u2014 The generated example contains the literal text `\\n\" +` after `id: fail`. Copying the documented example produces invalid YAML and cannot create the flow.",
+        "path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "start_line": 53,
+        "end_line": 53,
+        "observation_id": "234b00b644814fc1",
+        "claimed_path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `core/src/main/java/io/kestra/plugin/core/output/OutputValues.java:54` \u2014 The example now evaluates `{{ outputs.output_values.\u00b2}}`. Running a flow copied from this documentation fails expression evaluation instead of reading `taskrun_data`.## Defects, most severe first",
+        "path": "core/src/main/java/io/kestra/plugin/core/output/OutputValues.java",
+        "start_line": 54,
+        "end_line": 54,
+        "observation_id": "e0cfa1ff4c823a70",
+        "claimed_path": "core/src/main/java/io/kestra/plugin/core/output/OutputValues.java",
+        "path_resolution": "exact",
+        "merged_from": [
+          "ab5f27714f6500d8"
+        ]
+      },
+      {
+        "content": "**1. `core/src/main/java/io/kestra/plugin/core/execution/Assert.java:113` \u2014 optional `errorMessage` is dereferenced without a null check on the failure path**\n\n`errorMessage` is explicitly optional (`@Schema(title = \"Optional error message.\")`, line 80, no `@NotNull`, and `assert.yaml` never sets it). On any failed assertion, line 113 evaluates `runContext.render(errorMessage).as(String.class).map(...)` \u2014 with `errorMessage == null` this NPEs (either inside `render(null)` or at `.as(...)` if render returns null), so the intended `\"N assertion(s) failed!\"` exception is never thrown and the user sees a NullPointerException instead of the count/message.\n\nConcrete scenario: flow with `conditions: [\"{{ 1 == 2 }}\"]` and no `errorMessage` \u2192 task fails with `NullPointerException` (reason: \"...because ... is null\"), not \"1 assertion failed!\". The PR's own `failed()` test (AssertTest.java) also omits `errorMessage` \u2014 it only passes if `render(null)` tolerates null, which nothing in this diff guards against; as written the message assertion `containsString(\"2 assertions failed\")` would see the NPE's message instead.",
+        "path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "start_line": 113,
+        "end_line": 113,
+        "observation_id": "214393128b7ad41b",
+        "claimed_path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `core/src/main/java/io/kestra/plugin/core/execution/Assert.java:89` \u2014 conditions are parsed from the unrendered raw `getExpression()` as JSON, with no null/value handling**\n\n`MAPPER.readValue(this.conditions.getExpression(), LIST_TYPE_REFERENCE)` runs *before* any rendering and outside the per-item `try/catch`. Two failure modes:\n\n- If the `Property<List<String>>` carries a plain value (expression `null` \u2014 e.g. `Property.of(List.of(...))`, which the PR's own `success`/`failed` unit tests use), `readValue(null, ...)` throws `IllegalArgumentException: argument \"content\" is null` \u2192 the task blows up before evaluating a single condition, with no assertion information.\n- A list-level template such as `conditions: \"{{ outputs.gen.values }}\"` (string-form Property) feeds `{{...}}` to a JSON parser \u2192 `JsonProcessingException`, so dynamically-produced condition lists can never be used, and the failure message is a JSON syntax error, not an assertion result.\n\nI could not confirm whether Kestra's `Property.of(value)`/list deserializer leaves `expression` null in this version \u2014 that premise needs the (absent) sources \u2014 but the code has no guard for either null or non-JSON expression, and the failure is uncaught.",
+        "path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "start_line": 89,
+        "end_line": 89,
+        "observation_id": "82104e75e346769d",
+        "claimed_path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. `core/src/main/java/io/kestra/plugin/core/output/OutputValues.java:54` \u2014 documented example corrupted**\n\nThe example's third line was changed from `{{ outputs.output_values.values.taskrun_data }}` to `{{ outputs.output_values.\u00b2}}` \u2014 the `\u00b2` is mojibake that replaced the meaningful key, and it is incoherent with the very next line of the same example (`{{ outputs.output_values.values.execution_data }}`). Concrete failure: any user copying this `@Example` (it's the plugin's public documentation) gets a template referencing the nonexistent key `\u00b2` and a render failure at runtime; the example is simply wrong as documented.",
+        "path": "core/src/main/java/io/kestra/plugin/core/output/OutputValues.java",
+        "start_line": 54,
+        "end_line": 54,
+        "observation_id": "4f6e7df24a45e501",
+        "claimed_path": "core/src/main/java/io/kestra/plugin/core/output/OutputValues.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**4. `core/src/main/java/io/kestra/plugin/core/execution/Assert.java:95` \u2014 logger call has two arguments but one placeholder**\n\n`runContext.logger().error(\"Assertion `{}` failed!\", s, renderer)` \u2014 SLF4J drops the extra arg, so the rendered value that would diagnose the failed assertion is never logged; only the raw template appears. Minor, but it's a plain arg/placeholder mismatch, not intentional behavior.\n\nNote on what is missing to fully judge items 1\u20132: Kestra `Property` and `RunContext` sources (and `TruthUtils.FALSE_VALUES` for the documented \"0, -0, and ''\" coercion claim) are not present in the working directory; the diff alone doesn't settle those.",
+        "path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "start_line": 95,
+        "end_line": 95,
+        "observation_id": "3a43fe9e9c4cb8c2",
+        "claimed_path": "core/src/main/java/io/kestra/plugin/core/execution/Assert.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-iuty6na5-587d0cb38979/20260906-002735-70801",
+  "extractor": "3",
+  "unlocated": [
+    {
+      "content": "**Summary by severity:**\n| File | Line | Defect |\n|------|------|--------|\n| Assert.java | 65 | NPE/parse failure on value-only Property |\n| Assert.java | 90 | AtomicInteger.toString() in exception message |\n| Assert.java | 73 | Logger argument dropped |\n| Assert.java | 92 | Wrong type passed to render() + missing null check |\n| OutputValues.java | 54 | Invalid template variable `\u00b2` |",
+      "observation_id": "09f408b521cd29fc",
+      "claimed_path": "Assert.java",
+      "path_resolution": "basename"
+    }
+  ]
+}

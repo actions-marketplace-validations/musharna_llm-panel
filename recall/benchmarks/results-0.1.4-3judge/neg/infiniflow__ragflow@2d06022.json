@@ -1,0 +1,61 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `web/src/components/api-service/embed-modal/index.tsx:81` \u2014 The checkbox is labeled `avatarHidden`, but checking it sets `visibleAvatar` and emits `visible_avatar=1`. A user who checks \u201cHide avatar\u201d receives embed code that explicitly shows the avatar, the opposite of the selected behavior.",
+        "path": "web/src/components/api-service/embed-modal/index.tsx",
+        "start_line": 81,
+        "end_line": 81,
+        "observation_id": "1880332459963927",
+        "claimed_path": "web/src/components/api-service/embed-modal/index.tsx",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. `web/src/components/api-service/embed-modal/index.tsx` \u2014 lines 48 and 81\u201384 (hunks `@@ -27,10 +39,26 @@` and `@@ -48,6 +76,23 @@`): checkbox label and the parameter it emits assert opposite semantics.**\n\nThe checkbox is labelled from the key `avatarHidden` (\"hide/avatar hidden\", line 81) and its checked state drives `src += '&visible_avatar=1'` (line 48). The diff contains both halves of a contradiction: ticking \"avatar hidden\" generates an embed URL that asserts the avatar is *visible*.\n\nConcrete failure: user ticks \"Hide avatar\" \u2192 copies the generated snippet \u2192 the embedded chat renders with the avatar shown, the exact opposite of the selected option (or, if the share endpoint only accepts *absent* `visible_avatar` to mean visible, then the default unchecked state shows the avatar and the \"hidden\" option is a no-op/no param \u2014 either way one side is wrong). Both readings of the parameter contract have a wrong-output scenario, and the label/param pair cannot both be correct.",
+        "path": "web/src/components/api-service/embed-modal/index.tsx",
+        "start_line": 48,
+        "end_line": 48,
+        "observation_id": "48f1a2f25590269f",
+        "claimed_path": "web/src/components/api-service/embed-modal/index.tsx",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `web/src/components/api-service/embed-modal/index.tsx` \u2014 lines 80 and 89 (hunk `@@ -48,6 +76,23 @@`): hardcoded English UI strings in a fully-translated component.**\n\n`<h2>Option</h2>` (line 80) and `placeholder=\"Select a locale\"` (line 89) bypass `useTranslate('chat')` while every other string in this same modal uses `t(...)`.\n\nConcrete failure: with any non-English UI locale (e.g. zh), the modal renders \"Option\" and \"Select a locale\" in English mixed into an otherwise translated dialog.",
+        "path": "web/src/components/api-service/embed-modal/index.tsx",
+        "start_line": 80,
+        "end_line": 80,
+        "observation_id": "2ac38b5a17aeabf6",
+        "claimed_path": "web/src/components/api-service/embed-modal/index.tsx",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. `web/src/components/api-service/embed-modal/index.tsx` \u2014 lines 81\u201385 (hunk `@@ -48,6 +76,23 @@`): the label is not associated with the checkbox.**\n\n`Form.Item` has no `name` (so no `for`/`id` wiring) and the `Checkbox` has no children, so the rendered text is not a label for the control.\n\nConcrete failure: user clicks the words \"Hide avatar\" \u2192 nothing happens; only the tiny box itself is clickable, and screen readers get no accessible name/toggle association.\n\n---\n\nWhat I could **not** verify (tree is empty, so these remain open, not asserted): whether `t('avatarHidden')`/`t('locale')` exist in the `chat` locale dictionaries (if missing, the labels render as the raw keys), whether `languageOptions` is actually exported by `@/locales/config` (missing export = build failure) and whether its values are URL-safe locale codes, and whether the share endpoint recognises `visible_avatar`/`locale` at all (if it does not, the whole option block is inert \u2014 and it would also decide which side of defect 1 is broken). In `agent/component/rewrite.py` I found no point-at-able defect: the `if/else`/`prompt +=` indentation levels in the new lines match the hunk context, the closing `\"\"\"` at line 41 is valid Python, and both branches preserve the original requirement text.",
+        "path": "web/src/components/api-service/embed-modal/index.tsx",
+        "start_line": 81,
+        "end_line": 81,
+        "observation_id": "d35a5e18201f7f74",
+        "claimed_path": "web/src/components/api-service/embed-modal/index.tsx",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "## Defect: URL Parameter Injection in Embed Modal\n\n**File:** `web/src/components/api-service/embed-modal/index.tsx`  \n**Lines:** ~55-65 (in `generateIframeSrc` function)\n\n**Failure Scenario:**\n- Input: `token = \"abc&def\"` (or any value containing `&`, `=`, `?`, `#`)\n- Current behavior: `generateIframeSrc()` produces `/chat/share?shared_id=abc&def&from=...&auth=...`\n- Result: The URL parses as `shared_id=abc`, `def=` (empty param), `from=...` \u2014 the `shared_id` is truncated and an extra parameter is injected\n- Same vulnerability exists for `form`, `beta`, and `locale` parameters\n\n**Root Cause:** Lines 55-65 concatenate user-controlled values directly into the query string without `encodeURIComponent()` or `URLSearchParams`.\n\n```typescript\nconst generateIframeSrc = () => {\n  let src = `${location.origin}/chat/share?shared_id=${token}&from=${form}&auth=${beta}`;\n  // ...\n  if (locale) {\n    src += `&locale=${locale}`;  // locale from user-controlled Select\n  }\n  return src;\n};\n```\n\n**Fix:** Use `new URLSearchParams()` or `encodeURIComponent()` for each parameter.\n\n---\n\nNo other defects found in the diff. The Python prompt change preserves a pre-existing grammatical issue (\"is completely\") but doesn't introduce new functional defects. The CSS addition is benign.",
+        "path": "web/src/components/api-service/embed-modal/index.tsx",
+        "start_line": 55,
+        "end_line": 55,
+        "observation_id": "14ff81560579dfc8",
+        "claimed_path": "web/src/components/api-service/embed-modal/index.tsx",
+        "path_resolution": "exact",
+        "merged_from": [
+          "062b54574e1e01a3"
+        ]
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-u8qmefau-e5e520fe9c36/20260906-001248-4146250",
+  "extractor": "3",
+  "unlocated": []
+}

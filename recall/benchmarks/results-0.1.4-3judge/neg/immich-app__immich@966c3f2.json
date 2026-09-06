@@ -1,0 +1,109 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `server/src/repositories/album.repository.ts:167` \u2014 Casting `updatedAt` to `date` discards its time and changes the returned database type. Two assets updated at `2026-09-06T09:00Z` and `2026-09-06T18:00Z` produce `lastModifiedAssetTimestamp = \"2026-09-06\"` instead of the actual latest timestamp, so a mobile client comparing this value cannot detect the second update.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 167,
+        "end_line": 167,
+        "observation_id": "c740aa79762bcfcc",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `server/src/repositories/album.repository.ts:179` \u2014 The shared `deletedAt IS NULL` filter changes the semantics of `lastModifiedAssetTimestamp`. If an album\u2019s newest asset is soft-deleted at `T2` while another asset was updated at `T1`, the response reports `T1`; if its only asset is soft-deleted, it reports `undefined`. The removed query returned the deleted asset\u2019s `updatedAt` in both cases.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 179,
+        "end_line": 179,
+        "observation_id": "33919b7c0bbadbd3",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `server/src/repositories/album.repository.ts:146` \u2014 Casting `localDateTime` to `date` truncates both album bounds. Assets captured at `2026-09-06T09:15Z` and `2026-09-06T18:45Z` now yield date-only start/end values rather than those timestamps, breaking consumers of the existing `Date` fields and making same-day bounds indistinguishable.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 146,
+        "end_line": 146,
+        "observation_id": "8680e737b8b3f086",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. `server/src/repositories/album.repository.ts` \u2014 startDate/endDate silently changed from full timestamps to UTC-midnight dates (~lines 146 and 156, the `::date` casts on the min/max of `assets.localDateTime`).**\n\nThe old query returned `min`/`max(assets.localDateTime)` \u2014 exact instants. The new query returns `((localDateTime AT TIME ZONE 'UTC'::text)::date)`, truncating to midnight UTC. `AlbumAssetCount.startDate/endDate` (interface added field at ~line 15, still typed `Date | null`) feed both album-list and album-get responses, i.e. all clients, not just mobile. Concrete failure: an album with a single photo taken at 2026-09-06 14:37:22 previously returned startDate = endDate = 14:37:22; it now returns `2026-09-06T00:00:00Z`. Any UI that renders the capture span (\"Sep 6, 14:37\", \"last taken at 14:37\") now shows midnight, and the JWST-style day-rollover case (photo at Sep 5 23:59 + photo at Sep 6 00:01) previously showed a 2-minute span and now shows a 1-day span. The diff's own comment scopes the date-cast intent to the mobile-only field, yet it was applied to startDate/endDate as collateral.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 146,
+        "end_line": 146,
+        "observation_id": "9b41f30a5cae01c8",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `server/src/repositories/album.repository.ts` \u2014 `lastModifiedAssetTimestamp` is now the last update *day* at UTC midnight, not the last asset-update instant (line 167, `::date` cast on `max((updatedAt AT TIME ZONE 'UTC'::text))`).**\n\nThe removed `getLastUpdatedAssetForAlbumId` returned the most recently updated asset's exact `updatedAt`; the replacement returns midnight UTC of the latest update day. Concrete failure for the stated consumer (mobile): an album whose newest asset was updated at 2026-09-06T09:30Z is reported as `2026-09-06T00:00:00Z`. A client doing change detection against a stored last-seen value sees the same day-truncated value again after a later same-day update and concludes \"no change\", skipping the refresh and missing the new/changed asset; any \"updated N hours ago\" display is wrong by up to ~24h; and two albums updated at 00:01 and 23:59 the same day tie at midnight, destroying the relative ordering the mobile sort relied on.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 167,
+        "end_line": 167,
+        "observation_id": "d4d2ef13eb7344c9",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. `server/src/repositories/album.repository.ts` \u2014 UTC midnight as the day boundary makes album dates timezone-inconsistent with the user's local calendar (lines 145\u2013146 and 155\u2013156).**\n\n`AT TIME ZONE 'UTC'` fixes the day boundary at UTC midnight regardless of viewer. Concrete failure: user at UTC+8, album photo taken at local 2026-09-07 00:30 \u2192 instant 2026-09-06T16:30Z \u2192 day-truncated to 2026-09-06 \u2192 the album's dates no longer match the photo's local date, and when the returned midnight-UTC `Date` is formatted in the user's timezone it renders as 08:00 local, so displayed album start/end times are wrong by the user's UTC offset. This applies to the startDate/endDate regression in item 1 as well as to lastModifiedAssetTimestamp.\n\nSeverity note: all three are in this one query rewrite in `album.repository.ts`; the `album.service.ts` changes (lines ~68 and ~84) are just plumbing the now-wrong values through.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 145,
+        "end_line": 145,
+        "observation_id": "5e7a6af313139064",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 1 \u2014 `server/src/repositories/album.repository.ts:138-144` (startDate) & `145-151` (endDate)**\nThe query casts `localDateTime` to `::date` after `AT TIME ZONE 'UTC'`, stripping the time component. The old query returned full timestamps (`min/max(localDateTime)`). The TypeScript interface `AlbumAssetCount.startDate/endDate` is `Date | null` (includes time). Consumers (mobile app, frontend) expecting millisecond precision for sorting, \"today\" boundaries, or relative-time display will receive midnight UTC values.\n**Failure scenario**: Album has assets at `2024-01-15 08:00:00` and `2024-01-15 20:00:00` local time. Old: `startDate=2024-01-15T08:00:00Z`, `endDate=2024-01-15T20:00:00Z`. New: both become `2024-01-15T00:00:00Z`. Sorting within a day breaks; \"last asset today\" shows as midnight.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 138,
+        "end_line": 138,
+        "observation_id": "3cc130e58e610938",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 2 \u2014 `server/src/repositories/album.repository.ts:152-158` (lastModifiedAssetTimestamp)**\nSame `::date` cast on `updatedAt`. The old service code returned `lastModifiedAsset?.updatedAt` (full timestamp). Mobile app uses this for \"last modified\" display and album sort order.\n**Failure scenario**: Two assets updated same day at `10:00` and `14:00`. Old: timestamps differ, correct sort. New: both `::date` \u2192 same value, sort order non-deterministic; \"modified 4 hours ago\" shows as \"modified today\".",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 152,
+        "end_line": 152,
+        "observation_id": "92c45a4f84ae868d",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 3 \u2014 `server/src/repositories/album.repository.ts:138-158` (timezone conversion assumption)**\n`AT TIME ZONE 'UTC'` assumes `localDateTime`/`updatedAt` are stored as *naive timestamps in local time* and converts to UTC. If the columns are `timestamptz` (PostgreSQL timezone-aware) or already UTC, this double-converts (shifts by offset again), producing wrong dates. The old query had no conversion.\n**Failure scenario**: `updatedAt` stored as `timestamptz` `2024-01-15 12:00:00+00`. `AT TIME ZONE 'UTC'` treats it as naive local \u2192 converts to UTC \u2192 `2024-01-15 12:00:00+00` becomes `2024-01-15 17:00:00+00` (if server TZ=UTC-5) or similar shift. Date may flip to next/previous day.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 138,
+        "end_line": 138,
+        "observation_id": "36fe1e13aa080f4f",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 4 \u2014 `server/src/repositories/album.repository.ts:12` (interface mismatch)**\n`lastModifiedAssetTimestamp: Date | null` promises a timestamp, but the query returns `date` (no time). TypeScript won't catch this; runtime consumers get `Date` objects at midnight UTC.",
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 12,
+        "end_line": 12,
+        "observation_id": "a7bcff542ab0d628",
+        "claimed_path": "server/src/repositories/album.repository.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-g7l89cgz-fa7dad20c08b/20260906-001809-28180",
+  "extractor": "3",
+  "unlocated": []
+}

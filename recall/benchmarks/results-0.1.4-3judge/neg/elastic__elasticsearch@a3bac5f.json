@@ -1,0 +1,89 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java:21` \u2014 `ES_VERSION_6` is `\"5\"`. Both Version 6 basic tests therefore load `snapshot_v5.zip`; e.g. `RestoreFromVersion6IT` runs successfully against a Version 5 snapshot while never testing the Version 6 snapshot.",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java",
+        "start_line": 21,
+        "end_line": 21,
+        "observation_id": "207a33c2355ef46a",
+        "claimed_path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java:24` \u2014 `ES_VERSION_6_STANDARD_TOKEN_FILTER` is `\"5_custom_analyzer\"`. Both Version 6 custom-analyzer tests therefore load the Version 5 fixture; a compatibility failure specific to `snapshot_v6_custom_analyzer.zip` would go undetected.",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java",
+        "start_line": 24,
+        "end_line": 24,
+        "observation_id": "600b979a28ed32f3",
+        "claimed_path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. `TestSnapshotCases.java:21` and `:24` \u2014 the Version 6 constants hold Version 5 snapshot names**\n\n```java\npublic static final String ES_VERSION_6 = \"5\";                        // line 21\npublic static final String ES_VERSION_6_STANDARD_TOKEN_FILTER = \"5_custom_analyzer\";  // line 24\n```\n\nCopy-paste error: the values (and the adjacent comments, which both still say \"Index created in vES_5\") are the v5 names. Every consumer is affected:\n- `RestoreFromVersion6IT.java` and `MountFromVersion6IT.java` pass `TestSnapshotCases.ES_VERSION_6` \u2192 `\"5\"` \u2192 `verifyCompatibility(\"5\")` \u2192 `copySnapshotFromResources` loads `snapshot_5.zip`, not `snapshot_6.zip`.\n- `RestoreFromVersion6CustomAnalyzerIT.java` and `MountFromVersion6CustomAnalyzerIT.java` pass `\"5_custom_analyzer\"` \u2192 the v5 custom-analyzer zip.\n\nFailure scenario: the \"FromVersion6\"/\"MountFromVersion6\" test classes silently run the v5 fixtures \u2014 the exact same indexes every v5 test already runs \u2014 so restoring a v6-created index (`_doc` typed, no legacy `my_type`) is never exercised, the v6 deprecation behavior is never verified, and the newly added `snapshot_v6_custom_analyzer.zip` resource is dead. The suite reports green v6 coverage that does not exist.\n\n---",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java",
+        "start_line": 21,
+        "end_line": 21,
+        "observation_id": "ce6aeaa8d962c20f",
+        "claimed_path": "TestSnapshotCases.java",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `RestoreFromVersion5CustomAnalyzerIT.java:41`, `RestoreFromVersion6CustomAnalyzerIT.java:41`, `MountFromVersion5CustomAnalyzerIT.java:41`, `MountFromVersion6CustomAnalyzerIT.java:41` \u2014 the asserted warning string cannot equal what `getWarnings()` returns**\n\n```java\nassertEquals(1, warnings.size());\nassertEquals(\"The [standard] token filter is \" + \"deprecated and will be removed in a future version.\", warnings.getFirst());\n```\n\n`Response#getWarnings()` (low-level REST client) returns the raw `Warning` header values, and Elasticsearch emits deprecations in RFC 7234 form: `299 Elasticsearch-<version>-<hash> \"The [standard] token filter is deprecated ...\"`. The bare-message `assertEquals` therefore fails on every invocation of these four new tests, even when the restore/mount is perfectly valid and emits exactly the expected deprecation. The sibling `assertEquals(1, warnings.size())` on the same lines is also version-fragile: restoring the v5 fixture (typed index `my_type`) into a 7.x cluster can attach additional mapping-type deprecation warnings to the same response, pushing the count past 1. Net effect: the new custom-analyzer ITs fail in valid environments, so the deprecation-warning verification either never passes or has to be weakened to \"ignore\", i.e., the check cannot reliably gate on this warning.\n\n---",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/archiveindex/RestoreFromVersion5CustomAnalyzerIT.java",
+        "start_line": 41,
+        "end_line": 41,
+        "observation_id": "4fedb207dc6a1a4f",
+        "claimed_path": "RestoreFromVersion5CustomAnalyzerIT.java",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**3. `README.md:130` and `:149` / `:171` / `:189` \u2014 v6 fixture instructions are labeled Version 5 and use the wrong mapping type**\n\nThe second added index block (after the \"Create Index Version 6\" section) is headed `### Create Index Version 5 - Custom-Analyzer` (line 130) although it documents the v6 fixture, and its mapping type is `\"doc\"` (line 149) where the corresponding test javadoc and the actual v6 fixture use `_doc` (see `RestoreFromVersion6CustomAnalyzerIT.java`). Likewise the two added document blocks (`### Add documents Version 5 - Custom-Analyzer` at lines 171 and 189, the latter posting to `/index/_doc`) duplicate the v5 heading for the v6 case.\n\nFailure scenario: these README sections are the regeneration recipe for the committed snapshot zips. Someone rebuilding `snapshot_v6_custom_analyzer.zip` from them creates a v5-style typed index with type `doc` \u2014 a fixture that differs from what the test javadoc/assumptions describe, so the regenerated snapshot does not represent the v6 path being tested (and the wrong sections are hard to find because both versions are labeled \"5\").",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/resources/README.md",
+        "start_line": 130,
+        "end_line": 130,
+        "observation_id": "042df34effb04c27",
+        "claimed_path": "README.md",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 1: TestSnapshotCases.java:13,15 \u2014 ES_VERSION_6 constants have v5 values**\n```java\n// Line 13: public static final String ES_VERSION_6 = \"5\";\n// Line 15: public static final String ES_VERSION_6_STANDARD_TOKEN_FILTER = \"5_custom_analyzer\";\n```\nBoth `ES_VERSION_6` and `ES_VERSION_6_STANDARD_TOKEN_FILTER` are assigned v5 values (`\"5\"` and `\"5_custom_analyzer\"`). The four v6 test classes (`RestoreFromVersion6IT`, `RestoreFromVersion6CustomAnalyzerIT`, `MountFromVersion6IT`, `MountFromVersion6CustomAnalyzerIT`) all use these constants, so they will load v5 snapshot resources (`snapshot_v5_custom_analyzer.zip`) instead of the new v6 resources (`snapshot_v6_custom_analyzer.zip`). This makes the v6 tests effectively duplicates of v5 tests, providing zero v6 coverage.",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/TestSnapshotCases.java",
+        "start_line": 13,
+        "end_line": 13,
+        "observation_id": "66ad5d8bdc1be6e0",
+        "claimed_path": "TestSnapshotCases.java",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 2: RestoreFromVersion6CustomAnalyzerIT.java:42 / MountFromVersion6CustomAnalyzerIT.java:42 \u2014 Tests assert v5 warning message for v6 snapshot**\n```java\n// Both files, line 42:\nassertEquals(\"The [standard] token filter is \" + \"deprecated and will be removed in a future version.\", warnings.getFirst());\n```\nBecause of Defect 1, these tests actually run against the v5 snapshot (which uses `my_type` mapping), but the test class comments claim they test \"ES_v6 - Custom-Analyzer\" (which uses `_doc` mapping). The warning assertion may pass incidentally (same analyzer), but the test validates the wrong snapshot version \u2014 it's a false-positive v6 test.",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/java/org/elasticsearch/oldrepos/archiveindex/RestoreFromVersion6CustomAnalyzerIT.java",
+        "start_line": 42,
+        "end_line": 42,
+        "observation_id": "871f7b745f22f745",
+        "claimed_path": "RestoreFromVersion6CustomAnalyzerIT.java",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 3: README.md:124,183 \u2014 Duplicate \"Version 5 - Custom-Analyzer\" sections for v6 data**\nThe diff adds two \"Create Index Version 5 - Custom-Analyzer\" sections (lines 67-97 and 124-154) and two \"Add documents Version 5 - Custom-Analyzer\" sections. The second pair uses v6-style `_doc` mapping type but is mislabeled as \"Version 5\". This is documentation but misleads anyone generating test snapshots manually.",
+        "path": "x-pack/qa/repository-old-versions-compatibility/src/javaRestTest/resources/README.md",
+        "start_line": 124,
+        "end_line": 124,
+        "observation_id": "6edfc8da035c116b",
+        "claimed_path": "README.md",
+        "path_resolution": "basename",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-uzt5brdh-2ebf588dbe8b/20260906-002105-50574",
+  "extractor": "3",
+  "unlocated": []
+}

@@ -1,0 +1,139 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `integration-tests/extensions-install.test.ts:28` \u2014 If a developer already has a user-level extension named `test-extension`, running this test without sandboxing uninstalls it, replaces it with the fixture, and ultimately deletes it. The original extension is permanently lost.",
+        "path": "integration-tests/extensions-install.test.ts",
+        "start_line": 28,
+        "end_line": 28,
+        "observation_id": "0d96378678d2b26a",
+        "claimed_path": "integration-tests/extensions-install.test.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `integration-tests/extensions-install.test.ts:33` \u2014 If installation succeeds but any subsequent command or assertion fails, execution never reaches line 49. The fixture remains installed globally, so later tests load unexpected extension state and may fail spuriously.",
+        "path": "integration-tests/extensions-install.test.ts",
+        "start_line": 33,
+        "end_line": 33,
+        "observation_id": "becf9db9ca4a5ce9",
+        "claimed_path": "integration-tests/extensions-install.test.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `integration-tests/extensions-install.test.ts:52` \u2014 With `KEEP_OUTPUT=true`, `rig.cleanup()` preserves the test directory for diagnostics, but this unconditional `rmSync` immediately deletes it. A successful diagnostic run therefore produces no retained artifacts.",
+        "path": "integration-tests/extensions-install.test.ts",
+        "start_line": 52,
+        "end_line": 52,
+        "observation_id": "8de0f81c8368b926",
+        "claimed_path": "integration-tests/extensions-install.test.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. integration-tests/test-helper.ts:315, 343\u2013355 \u2014 no `error` listener on the spawned child, no timeout, no kill/unref.**\nThe promise settles only in the `close` handler; nothing listens for `'error'`, and nothing bounds the wait.\n- Failure scenario A: `bundlePath` doesn't exist (build not run before the integration tests). `spawn('node', ...)` emits `'error'` (ENOENT); with zero listeners the unhandled `'error'` event on the child EventEmitter throws and crashes the vitest worker instead of rejecting the promise \u2014 or, where `'close'` does fire after the failed spawn, it carries `code === null`, so the caller gets `reject(new Error(\"Process exited with code null:...\"))`, a misleading failure either way.\n- Failure scenario B: any invoked command blocks on stdin. The child is spawned with `stdio: 'pipe'` and, when `options.stdin` is absent, `child.stdin` is never written or ended. A CLI that prompts (and the new test proves the CLI prompts: install at extensions-install.test.ts:33\u201336 must be fed `'y\\n'`) blocks forever; the promise never settles, the spawned child is never killed, and since it is never `unref()`'d it keeps the suite's event loop alive after the vitest timeout fires. The new test invokes `uninstall`, `list`, and `update` with no stdin (extensions-install.test.ts:28, 39, 42\u201346, 49).",
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 315,
+        "end_line": 315,
+        "observation_id": "d3cdea272afa0676",
+        "claimed_path": "integration-tests/test-helper.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. integration-tests/test-helper.ts:330, 337 \u2014 `env` is referenced but not introduced by this diff.**\n`env.KEEP_OUTPUT` / `env.VERBOSE` are read inside the `data` handlers; the hunk adds no import or declaration for `env`. If the module doesn't already have `env` in scope, the first byte of any child output throws a `ReferenceError` inside the `'data'` handler \u2014 an uncaught exception that kills the worker on every successful run, i.e. this helper could never return. I could not check the rest of test-helper.ts to confirm whether `env` pre-exists (no checkout available), so this is conditional \u2014 but it is the first thing to verify.",
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 330,
+        "end_line": 330,
+        "observation_id": "36578a7c6e588b28",
+        "claimed_path": "integration-tests/test-helper.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. integration-tests/extensions-install.test.ts:49\u201352 \u2014 teardown only runs on the success path.**\n`uninstall`, `rig.cleanup()`, and `rmSync(rig.testDir!, ...)` execute only if all three `expect`s (lines 37, 40, 47) pass. If any assertion fails (or the install leaves partial state), the extension stays installed in the rig's persistent config and the temp directory stays on disk; the pre-test uninstall at lines 27\u201331 does not clean the directory. Concrete inputs: a regression in the CLI's `update` output \u2192 assertion at line 47 fails \u2192 test dir and installed extension leak into subsequent runs and CI workspaces.",
+        "path": "integration-tests/extensions-install.test.ts",
+        "start_line": 49,
+        "end_line": 49,
+        "observation_id": "26e4187161f33744",
+        "claimed_path": "integration-tests/extensions-install.test.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 1. `integration-tests/test-helper.ts:327` \u2014 Missing `error` event handler on spawned process\n\n**Failure scenario**: `node` not in PATH, `this.bundlePath` doesn't exist, or permission denied \u2192 spawn emits `error` event \u2192 Promise never settles \u2192 test hangs indefinitely (no timeout, no rejection).\n\n```typescript\n// Lines 327-357: only 'close' listener attached\nchild.on('close', (code: number) => { ... });\n// No: child.on('error', (err) => reject(err));\n```\n\n---",
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 327,
+        "end_line": 327,
+        "observation_id": "f32ca04b33ac4939",
+        "claimed_path": "integration-tests/test-helper.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 2. `integration-tests/test-helper.ts:327` \u2014 No execution timeout\n\n**Failure scenario**: CLI deadlocks, enters infinite loop, or waits for stdin not provided \u2192 test process hangs forever, blocking CI.\n\n```typescript\n// No timeout wrapper around the Promise\nconst promise = new Promise<string>((resolve, reject) => { ... });\n```\n\n---",
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 327,
+        "end_line": 327,
+        "observation_id": "35d1b0fdacf0545f",
+        "claimed_path": "integration-tests/test-helper.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 3. `integration-tests/test-helper.ts:347-350` \u2014 stderr pollutes successful result\n\n**Failure scenario**: Command exits 0 but writes warnings to stderr (e.g., deprecation notices) \u2192 `resolve(stdout + '\\n\\nStdErr:\\n' + stderr)` \u2192 test assertions like `expect(result).toContain('0.0.2')` pass spuriously or fail unpredictably depending on stderr content.\n\n```typescript\nif (code === 0) {\n  this._lastRunStdout = stdout;\n  let result = stdout;\n  if (stderr) {\n    result += `\\n\\nStdErr:\\n${stderr}`;  // line 349-350\n  }\n  resolve(result);\n}\n```\n\n---",
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 347,
+        "end_line": 347,
+        "observation_id": "bc7c64dc1aa6af35",
+        "claimed_path": "integration-tests/test-helper.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 4. `integration-tests/test-helper.ts:311` \u2014 `this.bundlePath` used but not verified initialized\n\n**Failure scenario**: `TestRig` constructed without `bundlePath` set (not shown in diff) \u2192 `spawn('node', [undefined, ...args])` \u2192 `TypeError` or spawns `node undefined` \u2192 confusing failure.\n\n---",
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 311,
+        "end_line": 311,
+        "observation_id": "db355306bb5a5cee",
+        "claimed_path": "integration-tests/test-helper.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 5. `integration-tests/extensions-install.test.ts:22-24` \u2014 Swallowed errors during pre-test uninstall\n\n**Failure scenario**: `uninstall` fails for a real reason (permission error, corrupted state) \u2192 `catch { /* empty */ }` silences it \u2192 test proceeds with dirty state \u2192 flaky/false positives.\n\n```typescript\ntry {\n  await rig.runCommand(['extensions', 'uninstall', 'test-extension']);\n} catch {\n  /* empty */  // line 24: swallows ALL errors\n}\n```\n\n---",
+        "path": "integration-tests/extensions-install.test.ts",
+        "start_line": 22,
+        "end_line": 22,
+        "observation_id": "5025ea936bf72713",
+        "claimed_path": "integration-tests/extensions-install.test.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 6. `integration-tests/extensions-install.test.ts:16,19,38,46` \u2014 Non-null assertions on `rig.testDir!` without guard\n\n**Failure scenario**: `rig.setup()` throws or returns early \u2192 `testDir` remains `undefined` \u2192 `join(undefined, ...)` / `writeFileSync(undefined, ...)` \u2192 `TypeError` at runtime with unhelpful stack trace.\n\n---",
+        "path": "integration-tests/extensions-install.test.ts",
+        "start_line": 16,
+        "end_line": 16,
+        "observation_id": "d15cdc0c082b1e51",
+        "claimed_path": "integration-tests/extensions-install.test.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 7. `integration-tests/extensions-install.test.ts:28,35` \u2014 Fragile substring assertions on combined stdout+stderr\n\n**Failure scenario**: Install succeeds but outputs \"Installing test-extension...\" on stderr \u2192 `result` contains \"test-extension\" via stderr pollution (defect #3) \u2192 test passes. Conversely, update outputs \"Updated to version 0.0.2\" on stderr only \u2192 `updateResult.toContain('0.0.2')` passes but stdout empty \u2192 false confidence.\n\n```typescript\nexpect(result).toContain('test-extension');        // line 28\nexpect(updateResult).toContain('0.0.2');           // line 35\n```",
+        "path": "integration-tests/extensions-install.test.ts",
+        "start_line": 28,
+        "end_line": 28,
+        "observation_id": "e7142d83c842e86c",
+        "claimed_path": "integration-tests/extensions-install.test.ts",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-lckt60sg-f9058d01d1f8/20260905-191756-2489883",
+  "extractor": "3",
+  "unlocated": []
+}

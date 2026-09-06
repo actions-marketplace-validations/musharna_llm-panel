@@ -1,0 +1,145 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **P1 \u2014 `pkg/shellexec/shellexec.go:550`**: Command-block environment variables are no longer added to the spawned process; they exist only behind the swap token, which `shell -c` commands do not consume. Input: an env file containing `FOO=bar` and `cmd:\"printenv FOO\"` on a local bash connection. Wrong behavior: the command prints nothing instead of `bar`.",
+        "path": "pkg/shellexec/shellexec.go",
+        "start_line": 550,
+        "end_line": 550,
+        "observation_id": "e36dedfce2a33827",
+        "claimed_path": "pkg/shellexec/shellexec.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **P1 \u2014 `pkg/blockcontroller/blockcontroller.go:516`**: A WSL command with `cmd:nowsh:true` is routed to `StartWslShellProcNoWsh`, which ignores `cmdStr` and starts an interactive WSL shell. Input: `cmd:\"touch /tmp/done\"`, `cmd:nowsh:true`, connection `wsl://Ubuntu`. Wrong behavior: `/tmp/done` is never created and the block remains in an interactive shell.",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 516,
+        "end_line": 516,
+        "observation_id": "88e148fea6de12d8",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **P1 \u2014 `pkg/blockcontroller/blockcontroller.go:544`**: The SSH branch checks `conn.WshEnabled` instead of the block-specific `connUnion.WshEnabled`. Input: an SSH connection with WSH installed and block metadata `cmd:nowsh:true`. Wrong behavior: the WSH-enabled launch path is used, including shell integration and credentials, despite the explicit opt-out.",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 544,
+        "end_line": 544,
+        "observation_id": "3b087b1b52b1b34f",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **P2 \u2014 `pkg/blockcontroller/blockcontroller.go:269`**: `resolveEnvMap` accepts `connName` but reads only the top-level `cmd:env`, ignoring the newly supported connection override. Input: top-level `cmd:env:{\"REGION\":\"us\"}` and `[server2]:{\"cmd:env\":{\"REGION\":\"eu\"}}` while connected to `server2`. Wrong behavior: the shell receives `REGION=us` instead of `REGION=eu`.",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 269,
+        "end_line": 269,
+        "observation_id": "69607ee2533d5375",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **P2 \u2014 `pkg/blockcontroller/blockcontroller.go:412`**: Shell type is derived from `remoteInfo.Shell`, ignoring the connection\u2019s configured shell-path override used during actual launch. Input: detected remote shell `/bin/bash`, configured shell path `/usr/bin/fish`, and distinct `cmd:initscript.bash`/`cmd:initscript.fish` values. Wrong behavior: fish is launched with the bash-specific initialization script.",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 412,
+        "end_line": 412,
+        "observation_id": "37805ea1588f6847",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "## 1. `cmd:nowsh` is silently ignored on SSH connections\n**File:** `pkg/blockcontroller/blockcontroller.go`, hunk `@@ -406,20 +539,14 @@` (`setupAndStartShellProcess`, SSH branch)\n\nThe branch condition is `if !conn.WshEnabled.Load()` instead of `if !connUnion.WshEnabled`. `connUnion.WshEnabled` is computed in `getConnUnion` as `wshEnabled && conn.WshEnabled.Load()`, where `wshEnabled = !blockMeta.GetBool(MetaKey_CmdNoWsh, false)` \u2014 i.e., it factors in `cmd:nowsh`. The WSL branch uses `!connUnion.WshEnabled` and the local branch uses `connUnion.WshEnabled`, but the SSH branch re-checks only the connection's own flag, then unconditionally mints a JWT, sets the swap-token sockname/RpcContext, and calls the wsh-enabled `StartRemoteShellProc`.\n\nFailure scenario: an SSH connection has wsh installed and healthy (`WshEnabled.Load() == true`); the user opens a terminal/cmd block with `\"cmd:nowsh\": true` expecting a plain non-integrated shell (the same meta on a WSL connection or local block does give a plain shell). On SSH the block runs with full wsh integration \u2014 JWT created, socket env injected, shell integration active. The explicit `cmd:nowsh` opt-out is a no-op. The old code at least did not mint the JWT in this case (`if !blockMeta.GetBool(MetaKey_CmdNoWsh, false)` guarded JWT creation).\n\n## 2. `cmd:env` and env-file variables are lost on all no-wsh paths\n**Files/lines:** `pkg/shellexec/shellexec.go` hunks `@@ -38,7 +38,6 @@` (field `Env` removed from `CommandOptsType`), `@@ -425,12 +424,6 @@` (SSH session `Setenv` loop removed in `StartRemoteShellProc`), `@@ -557,7 +550,6 @@` (`shellutil.UpdateCmdEnv(ecmd, cmdOpts.Env)` removed in `StartLocalShellProc`); `pkg/blockcontroller/blockcontroller.go` hunk `@@ -314,14 +351,120 @@` (`makeSwapToken` now stashes the env map only in `SwapToken.Env`)\n\nThe env parsed in `resolveEnvMap` (env file + `cmd:env`) is now delivered exclusively inside the swap token, which is unpacked by the wsh shell integration. On any path wsh does not run \u2014 local block with `cmd:nowsh: true`, an SSH/WSL connection without wsh installed (`StartRemoteShellProcNoWsh`/`StartWslShellProcNoWsh`), or a swap-token pack failure (see #4) \u2014 nothing ever reads `SwapToken.Env`.\n\nFailure scenario: local block with `\"cmd:nowsh\": true` and `cmd:env: {\"PATH\": \"/custom/bin:...\"}` (or a block env file). Previously `StartLocalShellProc` applied `cmdOpts.Env` directly to the child process environment, so the command saw the custom PATH. Now the variable exists only inside `WAVETERM_SWAPTOKEN` (if it is packed at all), and with `nowsh` no integration script unpacks it \u2014 the command runs with the parent environment, silently. The same applies to the env-file read: a read error in `resolveEnvMap` is now only `log.Printf`'d and execution proceeds without the env, where `createCmdStrAndOpts` previously failed the block loudly (`error reading command env file`).",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 539,
+        "end_line": 539,
+        "observation_id": "3f8ee785b381aa9f",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": [
+          "c5f1677f4aefb7d1"
+        ]
+      },
+      {
+        "content": "## 3. A wedged remote wsh server now hard-fails shell startup instead of degrading\n**File:** `pkg/blockcontroller/blockcontroller.go`, hunk `@@ -314,14 +351,120 @@` (`getConnUnion` \u2192 `getRemoteInfoAndShellType`, `return fmt.Errorf(\"unable to obtain remote info from connserver: %w\", err)`)\n\nEvery shell/cmd start on a wsh-enabled SSH or WSL connection now first performs a `RemoteGetInfoCommand` with a hard 2 s timeout, and any error aborts the whole start. The old flow attempted the wsh shell and, on failure, ran `conn.SetWshError(err)` then fell back to the no-wsh shell (`StartRemoteShellProcNoWsh`/`StartWslShellProcNoWsh`) \u2014 that fallback is now unreachable because the RPC fails earlier.\n\nFailure scenario: an SSH connection whose remote wsh server crashed/wedged or version-mismatched after connect (`WshEnabled.Load()` is still true, since the flag only flips on a shell-proc error). Opening a terminal on that connection now returns `unable to obtain remote info from connserver` and the block fails to open, where previously the terminal opened as a degraded plain SSH shell. Same on WSL. A slow-but-healthy remote over high-latency links is also at risk of intermittent failure given the 2 s timeout.",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 351,
+        "end_line": 351,
+        "observation_id": "23e4e19152abe1e8",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "## 4. `StartWslShellProc` dereferences `SwapToken` unconditionally and continues without it on error\n**File:** `pkg/shellexec/shellexec.go`, hunk `@@ -256,13 +255,13 @@`\n\n`packedToken, err := cmdOpts.SwapToken.PackForClient()` has no nil check (old code first verified the required JWT with `if !ok { return nil, fmt.Errorf(\"no jwt token provided to connection\") }`), and on error it only logs and proceeds with `cmdCombined` lacking the token.\n\nFailure scenarios:\n- Any caller that sets no `SwapToken` (or a nil one) now panics with a nil-pointer dereference inside `PackForClient` instead of getting the old clear error.\n- If `PackForClient` fails, the shell silently starts with no swap token \u2014 no JWT, no env from #2, no wsh credentials \u2014 where the old code failed loudly.\n- The packed token now contains the **entire** `cmd:env`/env-file content (potentially secrets) plus the JWT, embedded in the `wsl.exe ... sh -c` command line, visible to any local process enumerating the Windows process list. Previously the WSL command line carried only the JWT variable.",
+        "path": "pkg/shellexec/shellexec.go",
+        "start_line": 255,
+        "end_line": 255,
+        "observation_id": "0b7889db03fa2e36",
+        "claimed_path": "pkg/shellexec/shellexec.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "## 5. `cmd:env` null-value semantics flipped from \"keep env-file value\" to \"delete\"\n**File:** `pkg/blockcontroller/blockcontroller.go`, hunk `@@ -209,67 +209,104 @@` (`resolveEnvMap`)\n\nOld code: `if v == nil { continue }` \u2014 a null `cmd:env` entry left whatever the env file set. New code: `delete(rtn, k)` \u2014 the env-file value is removed.\n\nFailure scenario: env file sets `FOO=fromfile`; block meta has `cmd:env: {\"FOO\": null}`. Previously the command ran with `FOO=fromfile`; now `FOO` is absent from the env map entirely, so any `FOO` inherited from the parent environment leaks through instead. Silent behavior change for anyone relying on the old precedence.\n\n## 6. Per-connection overrides honored for init scripts but silently ignored for env/cwd\n**Files:** `pkg/blockcontroller/blockcontroller.go` hunks `@@ -209,67 +209,104 @@` and `@@ -314,14 +351,120 @@`; `pkg/waveobj/metamap.go` hunk `@@ -14,6 +14,22 @@` (`GetConnectionOverride`)\n\n`getCustomInitScript` consults the `[connName]` nested meta via `GetConnectionOverride`, and `wtypemeta.go` documents cmd:env/cmd:cwd as \"these can be nested under [conn]\". But `resolveEnvMap` and `createCmdStrAndOpts` only read the top-level `cmd:env`/`cmd:cwd` keys \u2014 the connection override is never consulted for env or cwd.\n\nFailure scenario: a user sets `\"[conn]\": {\"cmd:env\": {...}}` expecting per-connection environment (as the schema comment advertises). The init-script part of the same nested meta is honored, but the env portion is silently dropped, yielding a shell that has the custom init script yet none of its configured environment \u2014 inconsistent and invisible to the user.",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 209,
+        "end_line": 209,
+        "observation_id": "12f2917007518dfe",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": [
+          "b866265ebc24fbce"
+        ]
+      },
+      {
+        "content": "### 1. **Local shell processes lose all custom environment variables and WSH JWT token** (Critical)\n**File:** `pkg/shellexec/shellexec.go` (hunk `@@ -557,7 +550,6 @@ func StartLocalShellProc`)\n**Line:** ~553 (the removed `shellutil.UpdateCmdEnv(ecmd, cmdOpts.Env)` call)\n\nThe `CommandOptsType.Env` field was removed from the struct (hunk `@@ -38,7 +38,6 @@ type CommandOptsType struct`), and `StartLocalShellProc` no longer applies any custom environment variables to the local process. The caller (`setupAndStartShellProcess` in blockcontroller.go) populates `cmdOpts.SwapToken` with the JWT and resolved env vars, but `StartLocalShellProc` **never reads `cmdOpts.SwapToken`** \u2014 it only uses the hardcoded `envToAdd` map.\n\n**Failure scenario:** A user creates a local `cmd` block with `\"cmd:env\": {\"MY_VAR\": \"value\"}` and `\"cmd:nowsh\": false`. The command runs but `MY_VAR` is unset. If `\"cmd:nowsh\": true` (default), the WSH JWT token is placed in `swapToken.Env[\"WAVETERM_JWT_TOKEN\"]` but never injected into the process environment, breaking WSH integration for local shells entirely.\n\n---\n\n### 2. **SSH/WSL shell processes lose environment variables at startup** (Critical)\n**File:** `pkg/shellexec/shellexec.go` (hunk `@@ -425,12 +424,6 @@ func StartRemoteShellProc` and `@@ -256,13 +255,13 @@ func StartWslShellProc`)\n**Lines:** ~424-430 (removed `session.Setenv` loop), ~255-265 (removed JWT-from-Env logic)\n\nBoth `StartRemoteShellProc` (SSH) and `StartWslShellProc` (WSL) removed the loops that called `session.Setenv(envKey, envVal)` for each environment variable. Environment variables are now **only** passed via the packed swap token (`WAVETERM_SWAPTOKEN`) embedded in the command string. The swap token is unpacked by the shell initialization script on the remote side \u2014 which runs **after** the shell process starts.\n\n**Failure scenario:** A remote `cmd` block with `\"cmd:env\": {\"TERM\": \"xterm-256color\", \"LANG\": \"C.UTF-8\"}`. The SSH session / WSL process starts with no `TERM` or `LANG` set, causing terminal initialization failures, garbled output, or locale errors before the shell init script runs and unpacks the swap token. Custom env vars needed by the command itself (e.g., `PATH` modifications, API keys) are similarly unavailable during early shell setup.\n\n---",
+        "path": "pkg/shellexec/shellexec.go",
+        "start_line": 553,
+        "end_line": 553,
+        "observation_id": "86bb326dd226ccf4",
+        "claimed_path": "pkg/shellexec/shellexec.go",
+        "path_resolution": "exact",
+        "merged_from": [
+          "f6cd1ff1d550b9fb"
+        ]
+      },
+      {
+        "content": "### 3. **Unused `connName` parameter in `createCmdStrAndOpts`** (Moderate)\n**File:** `pkg/blockcontroller/blockcontroller.go` (hunk `@@ -209,67 +209,104 @@ func (bc *BlockController) resetTerminalState()` \u2014 the new function appears in this inserted region)\n**Line:** ~320 (new function signature in inserted code)\n\nThe new `createCmdStrAndOpts(blockId, blockMeta, connName string)` accepts `connName` but **never references it** in the function body. The parameter appears intended for connection-specific logic (e.g., per-connection command overrides) but is ignored.\n\n**Failure scenario:** If a future change expects `connName` to affect command construction (e.g., different default shells per connection), it will silently do nothing. Current call site at `setupAndStartShellProcess` (line ~498 in diff) passes `remoteName` which is discarded.\n\n---",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 320,
+        "end_line": 320,
+        "observation_id": "ab699dd9a66992e2",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 4. **Connection override key format mismatch** (Moderate)\n**File:** `pkg/blockcontroller/blockcontroller.go` (hunk `@@ -209,67 +209,104 @@` \u2014 `resolveEnvMap` function)\n**Line:** ~230 (`connMeta := meta.GetConnectionOverride(connName)`)\n\n`GetConnectionOverride` (added in `pkg/waveobj/metamap.go` hunk `@@ -14,6 +14,22 @@`) looks up key `\"[\" + connName + \"]\"`. For WSL connections, `connName` is `\"wsl://ubuntu\"` \u2192 key `\"[wsl://ubuntu]\"`. For SSH, `connName` is `\"user@host:port\"` \u2192 key `\"[user@host:port]\"`. These contain colons, slashes, `@` \u2014 unusual for meta keys and likely not what users would specify in block metadata.\n\n**Failure scenario:** User adds per-connection env override in block meta: `\"[wsl://ubuntu]\": {\"cmd:env\": {\"PATH\": \"/custom/bin\"}}`. The lookup for `\"[wsl://ubuntu]\"` may fail if the meta key was stored differently (e.g., without protocol prefix, or with sanitized name). Connection-specific env vars silently fall back to global values.\n\n---",
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 230,
+        "end_line": 230,
+        "observation_id": "012819aa259d0624",
+        "claimed_path": "pkg/blockcontroller/blockcontroller.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 5. **`GetWslConn` / `GetConn` lose on-demand connection capability** (Minor)\n**Files:** `pkg/wslconn/wslconn.go` (hunk `@@ -751,11 +755,8 @@ func getConnInternal`), `pkg/remote/conncontroller/conncontroller.go` (hunk `@@ -812,7 +812,7 @@ func getConnInternal`)\n\nBoth `GetWslConn` and `GetConn` removed `context.Context` and `shouldConnect`/`connFlags` parameters. `EnsureConnection` in both files now calls the parameterless getter, which **only returns existing connections** \u2014 it no longer triggers connection establishment.\n\n**Failure scenario:** A block references a WSL/SSH connection that exists but isn't currently connected. Previously `EnsureConnection` could trigger a connect (via `shouldConnect=true` or `connFlags`). Now it returns the disconnected connection object, and callers (e.g., `CheckConnStatus`) fail with \"not connected\" instead of attempting to connect.\n\n---\n\n**Summary:** Defects #1 and #2 are critical regressions \u2014 local shells lose all env/JWT support, and remote shells lose env vars at process startup. Defects #3 and #4 are correctness/maintainability issues. Defect #5 is a behavioral change that may break auto-reconnect flows.",
+        "path": "pkg/wslconn/wslconn.go",
+        "start_line": 755,
+        "end_line": 755,
+        "observation_id": "ff76ec2979fcc98a",
+        "claimed_path": "pkg/wslconn/wslconn.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-i97p9s7v-77b7ad163a39/20260905-191223-2466364",
+  "extractor": "3",
+  "unlocated": []
+}

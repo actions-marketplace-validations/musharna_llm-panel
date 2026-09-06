@@ -1,0 +1,181 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `src/Functions/array/arrayFirstLastIndex.cpp:166` \u2014 `documentation_last` is discarded because `FunctionArrayLastIndex` is registered without it. Querying `system.functions` for `arrayLastIndex` therefore still returns empty documentation/version metadata.",
+        "path": "src/Functions/array/arrayFirstLastIndex.cpp",
+        "start_line": 166,
+        "end_line": 166,
+        "observation_id": "af19499dec1be1d7",
+        "claimed_path": "src/Functions/array/arrayFirstLastIndex.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `src/Functions/array/arrayAggregation.cpp:463,485,507,529,551`; `src/Functions/array/arrayAll.cpp:77-78`; `src/Functions/array/arrayExists.cpp:77`; `src/Functions/array/arrayFirstLast.cpp:217-218,239-240,261,289`; `src/Functions/array/arrayFirstLastIndex.cpp:139-140,159-160` \u2014 The two-argument lambdas omit the required parentheses around `(x, y)`. Executing an example such as `arrayMin(x, y -> x/y, ...)` treats `x` as a separate argument/unresolved identifier instead of returning the documented result.",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 463,
+        "end_line": 463,
+        "observation_id": "c9c8b59dad4af31d",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `src/Functions/array/arrayAggregation.cpp:498` \u2014 The `arraySum` syntax is recorded as `arrayMax(...)`. A user copying the advertised syntax for input `[1,2,3,4]` invokes `arrayMax` and gets `4` instead of the sum `10`.",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 498,
+        "end_line": 498,
+        "observation_id": "bd79ab66ab977b89",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `src/Functions/array/arrayAggregation.cpp:482` \u2014 The `arrayMax` return description says a lambda produces the minimum result. For lambda results `[4,4,12,8]`, the function returns `12`, while the documentation claims the minimum (`4`).",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 482,
+        "end_line": 482,
+        "observation_id": "7b8841135f92bca7",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `src/Functions/array/arrayFirstLast.cpp:264` \u2014 The `arrayLast` \u201cNo match\u201d example actually calls `arrayFirst`. If adapted to matching inputs such as `[1,2,3]` with an always-true predicate, it returns `1` instead of the expected last match, `3`.",
+        "path": "src/Functions/array/arrayFirstLast.cpp",
+        "start_line": 264,
+        "end_line": 264,
+        "observation_id": "abdbba45c713bb61",
+        "claimed_path": "src/Functions/array/arrayFirstLast.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `src/Functions/array/arraySplit.cpp:136` \u2014 The required lambda for `arrayReverseSplit` is described as optional. Following that contract and calling `arrayReverseSplit([1,2,3])` produces an argument-count/type error rather than splitting the array.",
+        "path": "src/Functions/array/arraySplit.cpp",
+        "start_line": 136,
+        "end_line": 136,
+        "observation_id": "1002f1c54668ca7c",
+        "claimed_path": "src/Functions/array/arraySplit.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. src/Functions/array/arrayAggregation.cpp:498 \u2014 arraySum's documented syntax names the wrong function**\n`FunctionDocumentation::Syntax syntax_sum = \"arrayMax([func(x[, y1, ..., yN])], source[, cond1, ... , condN])\";` \u2014 copy-paste defect from the `arrayMax` block. Failure scenario: the generated docs for `arraySum` render its syntax section as `arrayMax([func...], source[...])`; a user reading the `arraySum` page and copying the signature runs `arrayMax` (or gets a name that contradicts the page title), so the docs for the function being documented are actively wrong.",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 498,
+        "end_line": 498,
+        "observation_id": "32b6dc8926a84d4d",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. src/Functions/array/arrayAggregation.cpp:482 \u2014 arrayMax's ReturnedValue claims it returns the minimum**\n`returned_value_max = \"Returns the maximum element in the source array, or the minimum element of the lambda results if provided.\"` \u2014 copied from the `arrayMin` block. Failure scenario: the `arrayMax` docs page states that with a lambda it returns the *minimum* of the lambda results; a user relying on it to reason about `arrayMax(x, y -> x/y, [4, 8, 12, 16], [1, 2, 1, 2])` expects `4` where the function actually returns `12` \u2014 the page contradicts both reality and its own example on the same screen.",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 482,
+        "end_line": 482,
+        "observation_id": "29199a9bed3eb985",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. src/Functions/array/arrayFirstLast.cpp:264 \u2014 the arrayLast \"No match\" example executes arrayFirst**\nInside `examples_last` (the `arrayLast` documentation), the \"No match\" example is `\"SELECT arrayFirst(x, y -> x=y, [0, 1, 2], [3, 3, 3]) AS res, toTypeName(res)\"`. The result string `\"0 UInt8\"` happens to coincide, but the query demonstrates `arrayFirst`, not `arrayLast`. Failure scenario: a user looking for `arrayLast`'s no-match behavior copies that example and gets `arrayFirst`'s behavior; the documented example never exercises the function it is supposed to illustrate, and the page misleads about which function is being shown.",
+        "path": "src/Functions/array/arrayFirstLast.cpp",
+        "start_line": 264,
+        "end_line": 264,
+        "observation_id": "c9314aa935cd885f",
+        "claimed_path": "src/Functions/array/arrayFirstLast.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**4. src/Functions/array/arrayFirstLastIndex.cpp:165 \u2014 arrayLastIndex documentation is built but never registered**\n`documentation_last` (with description, syntax, arguments, returned value, examples, introduced_in, category) is fully constructed, then the very next line `factory.registerFunction<FunctionArrayLastIndex>();` is left unchanged \u2014 the docs object is never attached. Failure scenario: `arrayLastIndex` still exposes no user-facing documentation (which is why it correctly remains in the `02415...must_be_documented.reference` list while `arrayFirstIndex` is removed), so all the added text for it is dead code; any tooling or docs page that pulls `FunctionDocumentation` for `arrayLastIndex` shows nothing, asymmetric with its sibling `arrayFirstIndex` documented in the same block.",
+        "path": "src/Functions/array/arrayFirstLastIndex.cpp",
+        "start_line": 165,
+        "end_line": 165,
+        "observation_id": "467c72a35379d9c6",
+        "claimed_path": "src/Functions/array/arrayFirstLastIndex.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**5. src/Functions/array/arraySplit.cpp:136 \u2014 arrayReverseSplit's lambda argument is marked \"Optional.\" though it is required**\n`arguments_split` labels `func(x[, y1, ..., yN])` as \"Optional. A lambda function ...\", contradicting the syntax line directly above it (`arrayReverseSplit(func(...), source...)`) and the required-lambda entry in the `arraySplit` arguments block. Failure scenario: a user reads that the lambda may be omitted and calls `arrayReverseSplit([1, 2, 3])`; the engine rejects it with a signature error since `ArraySplitImpl` requires the status lambda, so the docs advertise a call form that does not exist.",
+        "path": "src/Functions/array/arraySplit.cpp",
+        "start_line": 136,
+        "end_line": 136,
+        "observation_id": "ae59e5925990e1dd",
+        "claimed_path": "src/Functions/array/arraySplit.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**6. src/Functions/array/arrayAggregation.cpp:465, 487, 509, 531, 553 \u2014 false IntroducedIn versions for ancient functions**\n`introduced_in_min/max/sum/avg/prod = {21, 1}` claims `arrayMin`, `arrayMax`, `arraySum`, `arrayAvg`, and `arrayProduct` first appeared in 21.1; these functions have existed since the early 2017-era ClickHouse (1.1.x / 18.x docs). Failure scenario: the docs site renders \"Appears in: 21.1\" for these functions, so anyone checking the 21.1 changelog finds no such addition, and the version badge is factually wrong for five pages. Same defect pattern, lower confidence on the exact real version: `{1, 1}` for `arrayFirst`/`arrayFirstOrNull`/`arrayLast`/`arrayLastOrNull` (arrayFirstLast.cpp:219, 241, 267, 292 per hunk `@@ -201,10 +201,100 @@`) and `arrayFirstIndex`/`arrayLastIndex` (arrayFirstLastIndex.cpp:142, 166 per hunk `@@ -125,7 +125,44 @@`), which were added ~2019\u20132020, not 1.1.\n\nItems 1\u20133 are the ones I'd block on; 4\u20136 are documentation-wiring/accuracy defects of decreasing severity.## Defects Found",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 465,
+        "end_line": 465,
+        "observation_id": "f9e5cd37fcb50689",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": [
+          "5ff79ff5e16d5ccd"
+        ]
+      },
+      {
+        "content": "### 1. `src/Functions/array/arrayAggregation.cpp` (line ~512 in hunk)\n**Bug:** `arrayMax` documentation says \"minimum\" instead of \"maximum\" for lambda results\n```cpp\nFunctionDocumentation::ReturnedValue returned_value_max = \"Returns the maximum element in the source array, or the minimum element of the lambda results if provided.\";\n```\n**Failure scenario:** Users reading docs for `arrayMax` with a lambda will be told it returns the *minimum* of lambda results, when it actually returns the *maximum*.\n\n---",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 512,
+        "end_line": 512,
+        "observation_id": "658d8353995d5010",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 2. `src/Functions/array/arrayAggregation.cpp` (line ~535 in hunk)\n**Bug:** `arraySum` syntax incorrectly says `arrayMax` instead of `arraySum`\n```cpp\nFunctionDocumentation::Syntax syntax_sum = \"arrayMax([func(x[, y1, ..., yN])], source[, cond1, ... , condN])\";\n```\n**Failure scenario:** Documentation shows wrong function name `arrayMax` for the sum function's syntax.\n\n---",
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 535,
+        "end_line": 535,
+        "observation_id": "98fed7a0aee85b32",
+        "claimed_path": "src/Functions/array/arrayAggregation.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 3. `src/Functions/array/arrayFirstLast.cpp` (line ~275 in hunk)\n**Bug:** `arrayLast` \"No match\" example uses `arrayFirst` instead of `arrayLast`\n```cpp\n{\n    \"No match\",\n    \"SELECT arrayFirst(x, y -> x=y, [0, 1, 2], [3, 3, 3]) AS res, toTypeName(res)\",\n    \"0 UInt8\"\n}\n```\n**Failure scenario:** Example demonstrates `arrayFirst` behavior, not `arrayLast` behavior.\n\n---",
+        "path": "src/Functions/array/arrayFirstLast.cpp",
+        "start_line": 275,
+        "end_line": 275,
+        "observation_id": "2ef6800703da77ff",
+        "claimed_path": "src/Functions/array/arrayFirstLast.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 4. `src/Functions/array/arrayFirstLast.cpp` (line ~265 in hunk)\n**Bug:** `arrayLast` syntax has invalid `\u03bb=` prefix\n```cpp\nFunctionDocumentation::Syntax syntax_last = \"arrayLast(\u03bb=func(x[, y1, ..., yN]), source[, cond1, ... , condN])\";\n```\n**Failure scenario:** Documentation shows invalid syntax `\u03bb=func(...)` which is not valid ClickHouse SQL.\n\n---",
+        "path": "src/Functions/array/arrayFirstLast.cpp",
+        "start_line": 265,
+        "end_line": 265,
+        "observation_id": "b52000ea0e232b67",
+        "claimed_path": "src/Functions/array/arrayFirstLast.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 5. `src/Functions/array/arraySplit.cpp` (line ~145 in hunk)\n**Bug:** `arrayReverseSplit` lambda argument incorrectly marked as \"Optional\"\n```cpp\n{\"func(x[, y1, ..., yN])\", \"Optional. A lambda function which operates on elements of the source array...\"}\n```\n**Failure scenario:** Users may think the lambda is optional, but `arrayReverseSplit` requires a lambda function (same as `arraySplit`).",
+        "path": "src/Functions/array/arraySplit.cpp",
+        "start_line": 145,
+        "end_line": 145,
+        "observation_id": "fee8e85728f594b2",
+        "claimed_path": "src/Functions/array/arraySplit.cpp",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-ugcsg2i9-873295353b64/20260905-200821-2848509",
+  "extractor": "3",
+  "unlocated": []
+}

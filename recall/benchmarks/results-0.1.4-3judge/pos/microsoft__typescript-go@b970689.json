@@ -1,0 +1,129 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **[P1] `internal/parser/reparser.go:120`** \u2014 `ImportClause` is optional, but `Clone` is called unconditionally. Input `/** @import \"./side-effects\" */` produces a JSDoc import tag with no clause, causing a nil-pointer panic during parsing instead of a diagnostic or successful parse.",
+        "path": "internal/parser/reparser.go",
+        "start_line": 120,
+        "end_line": 120,
+        "observation_id": "6881444171683d4d",
+        "claimed_path": "internal/parser/reparser.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **[P1] `internal/parser/reparser.go:122`** \u2014 Marking every JSDoc import clause as `IsTypeOnly` applies ordinary `import type` grammar restrictions that JSDoc imports do not have. Input `/** @import Foo, { I } from \"./a\" */` is legal, but now fails with TS1363.",
+        "path": "internal/parser/reparser.go",
+        "start_line": 122,
+        "end_line": 122,
+        "observation_id": "83f692ae1f826a3c",
+        "claimed_path": "internal/parser/reparser.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **[P2] `internal/ls/utilities.go:23`** \u2014 The module-specifier node remains parented by the original `JSDocImportTag`, while this case no longer recognizes that parent. For `/** @import { Foo } from \"./types\" */`, invoking go-to-definition on `\"./types\"` fails to resolve the referenced module.",
+        "path": "internal/ls/utilities.go",
+        "start_line": 23,
+        "end_line": 23,
+        "observation_id": "97fede1914955c65",
+        "claimed_path": "internal/ls/utilities.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **[P2] `internal/parser/reparser.go:120`** \u2014 The plain clone does not preserve the reparse mapping needed for imported identifiers. For `/** @import Foo from \"./types\" */` followed by `/** @param {Foo} foo */`, type display reports `(foo: default) => void` instead of `(foo: Foo) => void`, as shown by the changed `importTag3.types` baseline.",
+        "path": "internal/parser/reparser.go",
+        "start_line": 120,
+        "end_line": 120,
+        "observation_id": "73123087462a1ae0",
+        "claimed_path": "internal/parser/reparser.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. `internal/parser/reparser.go:120-122` \u2014 unconditional dereference of a possibly-nil `ImportClause` (compile crash on clause-less `@import`)**\n\n```go\ncase ast.KindJSDocImportTag:\n    importTag := tag.AsJSDocImportTag()\n    importClause := importTag.ImportClause.Clone(&p.factory)   // line 120\n    importClause.Flags |= ast.NodeFlagsReparsed                // line 121\n    importClause.AsImportClause().IsTypeOnly = true            // line 122\n```\n\nFailure scenario: a JS file with a `@import` tag that has no import clause (side-effect-style `@import from \"./m\"` or malformed `/** @import */`), or error-recovery output from a bad tag. The diff's own deleted code treated this field as nullable: the old `IsDefaultImport` and `isExclusivelyTypeOnlyImportOrExport` both guarded `node.AsJSDocImportTag().ImportClause` with `!= nil`, and the same PR's `typeeraser.go` hunk explicitly anticipates `n.ImportClause == nil` for the new kind (`KindJSImportDeclaration`). Neither `Clone` nor `AsImportClause().IsTypeOnly = true` is nil-safe, so this dereferences nil \u2192 panic during reparse for a file the previous code handled without crashing.",
+        "path": "internal/parser/reparser.go",
+        "start_line": 120,
+        "end_line": 120,
+        "observation_id": "d83e52fa9a61c45e",
+        "claimed_path": "internal/parser/reparser.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `internal/parser/reparser.go:122` \u2014 forced `IsTypeOnly = true` makes the checker reject valid `@import` forms the reference compiler accepts**\n\nThe unconditionally-set `IsTypeOnly` turns every converted tag into `import type`, which produces two wrong diagnostics, both recorded in the baselines this PR commits:",
+        "path": "internal/parser/reparser.go",
+        "start_line": 122,
+        "end_line": 122,
+        "observation_id": "e45e39609f878e5d",
+        "claimed_path": "internal/parser/reparser.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `testdata/baselines/reference/submodule/conformance/importTag16.errors.txt:1` \u2014 `@import Foo, { I } from \"./a\"` now errors with TS1363 (\"A type-only import can specify a default import or named bindings, but not both\"). The PR's own `importTag16.errors.txt.diff` shows the reference baseline for this input is empty (\"<no content>\", 0 errors): valid, accepted JSDoc now hard-errors, and the tag's names are also no longer usable (the diff converts a working reference case into a compile error).\n\n- `testdata/baselines/reference/submodule/conformance/importTag15(module=es2015).errors.txt:1-2` \u2014 `@import ... with { type: \"json\" }` under `module=es2015` now reports both TS2823 and TS2857 on each tag (4 errors), where the reference reports only TS2823 (2 errors) for the same input; upstream gates TS2857 behind module modes that actually support attributes, and the PR's accepted-diff shows the new TS2857 lines as port-only additions.",
+        "path": "testdata/baselines/reference/submodule/conformance/importTag16.errors.txt",
+        "start_line": 1,
+        "end_line": 1,
+        "observation_id": "48451390d44dbeab",
+        "claimed_path": "testdata/baselines/reference/submodule/conformance/importTag16.errors.txt",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. `internal/parser/reparser.go:123` \u2014 default-bound `@import` aliases resolve to a type named \"default\" instead of the imported alias**\n\nThe conversion (and the resulting type-only default-import binding path) makes the imported default type's symbol name \"default\" rather than the alias the user wrote. The PR's own baseline changes record the regression: `testdata/baselines/reference/submodule/conformance/importTag3.types` changes `>f : (foo: Foo) => void` / `>foo : Foo` to `>f : (foo: default) => void` / `>foo : default`, and `importTag16.types` likewise (with the new `importTag3.types.diff`/`importTag16.types.diff` explicitly showing `-` \"Foo\" / `+` \"default\" vs the reference). Failure scenario: hover/quick-info over a JSDoc `@import Foo from \"./m\"` alias, or generated `.types`-style output, displays the type as `default` whenever `Foo` is a default export \u2014 a name that matches neither ordinary `import Foo from \"m\"` behavior nor the reference compiler.",
+        "path": "internal/parser/reparser.go",
+        "start_line": 123,
+        "end_line": 123,
+        "observation_id": "2d47b0992fb12cd6",
+        "claimed_path": "internal/parser/reparser.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 1: `internal/ls/utilities.go:23` \u2014 Language service breaks for JSDoc `@import` tags**\n\nThe `tryGetImportFromModuleSpecifier` function no longer handles `ast.KindJSDocImportTag`. After reparsing, the original `JSDocImportTag` node remains in the JSDoc comment tree (a separate `JSImportDeclaration` is synthesized into the statement list). When the language service queries a position inside a JSDoc `@import` tag (e.g., hover/go-to-definition on the module specifier string), `node.Parent` is the `JSDocImportTag`, which is now unhandled \u2192 returns `nil` \u2192 language service features fail.\n\n**Failure scenario:** User hovers over `\"./types\"` in `/** @import { Foo } from \"./types\" */` \u2192 `tryGetImportFromModuleSpecifier` returns `nil` \u2192 no \"go to definition\" or quick info.\n\n---",
+        "path": "internal/ls/utilities.go",
+        "start_line": 23,
+        "end_line": 23,
+        "observation_id": "570bf1ca2f301060",
+        "claimed_path": "internal/ls/utilities.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 2: `internal/parser/reparser.go:118` \u2014 Potential nil pointer dereference on malformed JSDoc**\n\n```go\nimportClause := importTag.ImportClause.Clone(&p.factory)\n```\n\nIf the parser produces a `JSDocImportTag` with `ImportClause == nil` (malformed `@import` with missing clause), `Clone` is called on `nil` \u2192 panic. The parser should guarantee non-nil, but no guard exists here.\n\n**Failure scenario:** Malformed JSDoc `/** @import from \"./foo\" */` (missing import clause) \u2192 parser creates `JSDocImportTag{ImportClause: nil}` \u2192 reparser panics on `nil.Clone(...)`.\n\n---",
+        "path": "internal/parser/reparser.go",
+        "start_line": 118,
+        "end_line": 118,
+        "observation_id": "d0c4f4bb2bc87eb1",
+        "claimed_path": "internal/parser/reparser.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 3: `internal/transformers/commonjsmodule.go:66` and `internal/transformers/esmodule.go:42` \u2014 Unconditional elision of `JSImportDeclaration`**\n\nBoth transformers unconditionally return `nil` for `KindJSImportDeclaration`:\n```go\ncase ast.KindJSImportDeclaration:\n    node = nil\n```\nUnlike `KindImportDeclaration` (which goes through `visitTopLevelImportDeclaration`/`visitImportDeclaration` that respect `IsTypeOnly`), this drops the node even if a bug causes a non-type-only `JSImportDeclaration` to exist. Fragile; should mirror the `ImportDeclaration` logic or at least assert `IsTypeOnly`.\n\n**Failure scenario:** If a future change creates a non-type-only `JSImportDeclaration` (or reparser bug sets `IsTypeOnly=false`), it would be silently dropped instead of being emitted as a side-effect import.\n\n---",
+        "path": "internal/transformers/commonjsmodule.go",
+        "start_line": 66,
+        "end_line": 66,
+        "observation_id": "25d228f6ac22c290",
+        "claimed_path": "internal/transformers/commonjsmodule.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 4: `internal/ast/utilities.go:2361` \u2014 `IsDefaultImport` comment/output mismatch**\n\nFunction comment claims to handle `ImportDeclaration | ImportEqualsDeclaration | ExportDeclaration` but implementation only handles `ImportDeclaration` and `JSImportDeclaration`. Returns `false` for `ImportEqualsDeclaration`/`ExportDeclaration` (pre-existing bug), but the comment was updated to remove `JSDocImportTag` without fixing the actual coverage.\n\n**Failure scenario:** Caller passes `ExportDeclaration` with default export \u2192 expects `true` \u2192 gets `false`.",
+        "path": "internal/ast/utilities.go",
+        "start_line": 2361,
+        "end_line": 2361,
+        "observation_id": "f2e0228533974bbf",
+        "claimed_path": "internal/ast/utilities.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-wbon0kqj-b188e3210bd5/20260905-190111-2395102",
+  "extractor": "3",
+  "unlocated": []
+}

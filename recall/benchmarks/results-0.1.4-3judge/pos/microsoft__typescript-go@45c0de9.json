@@ -1,0 +1,39 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **Critical \u2014 `internal/ls/diagnostics.go:44`**: Every diagnostic is converted with a nil `Converters`. For input such as `const x: string = 1`, a `textDocument/diagnostic` request reaches `toLSPDiagnostic`, which uses the converter to calculate the diagnostic range and dereferences nil, crashing the request instead of returning the type error.",
+        "path": "internal/ls/diagnostics.go",
+        "start_line": 44,
+        "end_line": 44,
+        "observation_id": "ea121f937cd78407",
+        "claimed_path": "internal/ls/diagnostics.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 1 \u2014 `internal/ls/diagnostics.go:43` \u2014 nil-pointer panic on every diagnostic**\n\n```go\nlspDiagnostics = append(lspDiagnostics, toLSPDiagnostic(diag, nil)) // converters can be nil if not needed\n```\n\nThe refactor changes every call site from `toLSPDiagnostic(diag, l.converters)` to `toLSPDiagnostic(diag, nil)`, and the diff makes no compensating change to `toLSPDiagnostic` (its signature at line 49 still takes a plain `*Converters`). That function converts diagnostic positions into protocol ranges via `converters.Range(...)` (and `converters.URI/Range` for related-information entries), so a nil `converters` dereferences and panics. The comment's premise (\"converters can be nil if not needed\") is asserted, not implemented.\n\nFailure scenario: the user opens any Go file containing at least one diagnostic (e.g. a syntax error, or any semantic error like an undefined identifier) \u2192 `GetDocumentDiagnostics` \u2192 `toLSPDiagnostics` \u2192 first `toLSPDiagnostic(diag, nil)` \u2192 nil dereference. The LSP request panics; diagnostics are never returned, and depending on the server's panic handling the whole language server crashes. The behaviour is strictly worse than before the change, where `l.converters` was always passed. Note: I could not re-read the body of `toLSPDiagnostic` (empty tree), but nothing in the diff makes the nil pointer safe \u2014 the pre-existing function was only ever called with a real converter.",
+        "path": "internal/ls/diagnostics.go",
+        "start_line": 43,
+        "end_line": 43,
+        "observation_id": "28d3a787893a7efa",
+        "claimed_path": "internal/ls/diagnostics.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 2 \u2014 `internal/ls/diagnostics.go:26\u201332` (removed `Kind` field) \u2014 report loses its required `kind` discriminator**\n\nThe diff deletes `Kind: lsproto.StringLiteralFull{}` from the `FullDocumentDiagnosticReport` literal. In the LSP 3.15 document-diagnostic-report protocol, `kind` (`\"full\"`) is the required discriminator that clients use to tell a full report apart from `\"unchanged\"`. Depending on the generated struct's JSON tags, the response now either omits `kind` entirely or emits its zero value \u2014 either way it is not `\"full\"`.\n\nFailure scenario: a client such as VS Code that routes the report by checking `report.kind === \"full\"` doesn't match, so it discards or errors on the diagnostic report; squiggles for errors/suggestions silently stop appearing even though the server computed them.\n\nThe diff contains no other defects I can point at: the `GetEmitDeclarations()` gate and the syntax-first/else-semantic branching mirror the previous control flow, and the empty-slice/ordering behaviour of `toLSPDiagnostics` matches the old code.",
+        "path": "internal/ls/diagnostics.go",
+        "start_line": 26,
+        "end_line": 26,
+        "observation_id": "083b883e21e1ad48",
+        "claimed_path": "internal/ls/diagnostics.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-1w07drk3-6a4b5cfa0bad/20260905-194507-2721391",
+  "extractor": "3",
+  "unlocated": []
+}

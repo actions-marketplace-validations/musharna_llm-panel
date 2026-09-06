@@ -1,0 +1,89 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `linera-core/src/updater.rs:174` \u2014 The immediate break can discard enough pending responses to recognize a trusted validator error. With four equal-weight validators (quorum 3, validity threshold 2), responses `Ok(X)`, `Err(E)`, `Ok(Y)` make quorum impossible and trigger the break while a fourth `Err(E)` is pending. The function reports a generic quorum failure instead of the trusted error `E`, preventing callers from handling the actual deterministic failure.",
+        "path": "linera-core/src/updater.rs",
+        "start_line": 174,
+        "end_line": 174,
+        "observation_id": "9860f0e9ca399664",
+        "claimed_path": "linera-core/src/updater.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `linera-core/src/updater.rs:181` \u2014 `grace_period` is an unrestricted `f64`. Calling `communicate_with_quorum(..., Some(-0.1))` or `Some(NaN)` and then reaching quorum makes `Duration::mul_f64` panic instead of returning a `CommunicationError`.",
+        "path": "linera-core/src/updater.rs",
+        "start_line": 181,
+        "end_line": 181,
+        "observation_id": "70a2a659814c141d",
+        "claimed_path": "linera-core/src/updater.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. `linera-core/src/updater.rs` \u2014 new lines 174\u2013175 (hunk `@@ -167,13 +170,15 @@`): the unconditional `break 'vote_wait` when `highest_key_score + remaining_votes < committee.quorum_threshold()` cuts off error collection in exactly the case where it matters.**\n\nThe old code treated \"no key can reach quorum\" the same as \"quorum reached\": it set `end_time = now + elapsed \u00d7 grace` and kept draining `responses` \u2014 the loop's own comment said the grace period exists to \"collect more values **or error information**\". The new break ignores `error_scores` entirely: it fires on value-score impossibility alone, so the remaining validators never get to report, and an error that a quorum of validators would have produced can no longer reach quorum.\n\nFailure scenario: committee of 6, equal weights, quorum 4. Validators respond in order: `Err(E)`, `Err(E)`, `Err(E)`, `Ok(key A, value)` \u2192 `remaining_votes = 2`, `highest_key_score = 1`, so `1 + 2 < 4` \u2192 immediate break. `error_scores[E] = 3 < 4`, so the function leaves with no value quorum and no error quorum \u2192 the `NoQuorum` path. Old behavior: grace window (0.2 \u00d7 elapsed) lets validator 5 respond `Err(E)` \u2192 error quorum 4 \u2192 the function returns the specific `RemoteNodeError(E)`. Same inputs, different result class: the caller now gets a generic no-quorum outcome and (in the client paths at hunks `@@ -1111`, `@@ -1516`) falls back to per-validator retries, instead of learning immediately that a quorum of validators agrees on error `E` (e.g. all reporting `MissingCertificateValue`). The fix direction in the old comment \u2014 \"or it becomes clear that no key can\" \u2192 also wait grace \u2014 was deleted; only the quorum-reached branch keeps its grace.",
+        "path": "linera-core/src/updater.rs",
+        "start_line": 174,
+        "end_line": 174,
+        "observation_id": "8ff18cf807438c1b",
+        "claimed_path": "linera-core/src/updater.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `linera-core/src/updater.rs` \u2014 new line 34 (hunk `@@ -31,9 +31,9 @@`): `DEFAULT_GRACE_PERIOD` is `0.1`, half of the old `GRACE_PERIOD = 0.2`, and every pre-existing caller updated in this PR passes `None` (client/mod.rs hunks `@@ -1111`, `@@ -1147`, `@@ -1516`, `@@ -1676`).**\n\nNone of the existing call sites opted into a different value, so all four client paths silently get half the previous grace window. Failure scenario: same validator response timing as before; a straggler that previously landed inside the 0.2\u00d7elapsed window now misses the 0.1\u00d7 window, so e.g. the `received_certificate_batches` result at hunk `@@ -1516` is built from strictly fewer collected values \u2192 the client then hits `NoValueForCertificate` / `MissingCertificateValue` NodeErrors and extra round-trips that the old 0.2 window absorbed. Behavior change applied to all existing callers without any of them requesting it.\n\nThings I checked and found non-defective: the `#[instrument]`/doc-comment reorder in `worker.rs` (`@@ -350,8 +351,8 @@`) is semantically a no-op in Rust (both are attributes on the same item); the label/break syntax is valid; the `impl Into<Option<f64>>` + `None` call sites type-check (`None` coerces to `Option<f64>`, which satisfies `Into<Option<f64>>`). Cosmetic only: the `node.rs` fix (`@@ -202,7 +202,7 @@`) still leaves \"ceritifcates\" misspelled in the same message.\n\nI could not verify (no tree present): whether any other caller of `communicate_with_quorum` exists un-updated (would be a compile error), and the exact post-loop use of `error_scores`/`last_key` \u2014 item 1's severity depends on that post-loop logic, which the diff does not show.",
+        "path": "linera-core/src/updater.rs",
+        "start_line": 34,
+        "end_line": 34,
+        "observation_id": "1deaa87f644daad5",
+        "claimed_path": "linera-core/src/updater.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 1 \u2014 `linera-core/src/updater.rs` (hunk starting at line 167): Early exit without grace period when quorum becomes impossible**\n\nThe new logic breaks immediately when `highest_key_score + remaining_votes < committee.quorum_threshold()`, whereas the original code set `end_time` and waited for a grace period in this same condition. This discards the grace period for the \"no quorum possible\" case.\n\n**Failure scenario:** 4 validators, quorum threshold 3. Validators 1 and 2 respond quickly with different values (highest_key_score = 1). Validators 3 and 4 are slow. After validators 1\u20132 respond, `remaining_votes = 2`, `1 + 2 = 3` \u2014 quorum still possible. Validator 3 responds with a third value (highest_key_score still 1, remaining_votes = 1). Now `1 + 1 = 2 < 3` \u2014 no quorum possible. **New code breaks immediately**, returning an error without waiting for validator 4. Validator 4 might have returned a critical error (e.g., `MissingCertificateValue`) that would have changed the error returned to the caller. Original code would have waited the grace period and collected it.",
+        "path": "linera-core/src/updater.rs",
+        "start_line": 167,
+        "end_line": 167,
+        "observation_id": "0ec4db2733520983",
+        "claimed_path": "linera-core/src/updater.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 2 \u2014 `linera-core/src/node.rs:205`: Misspelling remains in error message**\n\n```rust\n#[error(\"Response doesn't contain requested ceritifcates: {0:?}\")]\n```\n\"ceritifcates\" \u2192 should be \"certificates\". The fix corrected \"Reponse\" \u2192 \"Response\" but left the second typo.",
+        "path": "linera-core/src/node.rs",
+        "start_line": 205,
+        "end_line": 205,
+        "observation_id": "f69e76d463a4d81f",
+        "claimed_path": "linera-core/src/node.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 3 \u2014 `linera-core/src/updater.rs:34` (hunk): Grace period default halved from 0.2 to 0.1**\n\n`DEFAULT_GRACE_PERIOD = 0.1` (was `GRACE_PERIOD = 0.2`). This is a behavioral change that may cause premature termination before slow validators respond. If intentional, it should be documented as a breaking change; if unintentional, it reduces fault tolerance.",
+        "path": "linera-core/src/updater.rs",
+        "start_line": 34,
+        "end_line": 34,
+        "observation_id": "26bff935009a22d4",
+        "claimed_path": "linera-core/src/updater.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 4 \u2014 `linera-core/src/client/mod.rs` (hunks at lines 1111, 1146, 1516, 1673): `None` added as trailing argument without visible callee signature change**\n\nFour call sites add a `, None,` argument. The diff does not show the corresponding function signature update. If the callee wasn't updated to accept this extra parameter, this would not compile. Since the PR presumably compiles, the signature was likely changed elsewhere \u2014 but the review cannot verify the callee matches all four call sites (arity, type, semantics).",
+        "path": "linera-core/src/client/mod.rs",
+        "start_line": 1111,
+        "end_line": 1111,
+        "observation_id": "aeb93ac427152b40",
+        "claimed_path": "linera-core/src/client/mod.rs",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-sqpc4ghi-71ba3b6b6ffa/20260905-192517-2516496",
+  "extractor": "3",
+  "unlocated": []
+}

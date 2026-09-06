@@ -1,0 +1,69 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java:568** \u2014 `0` is now accepted even though the supported values are positive integers or the `-1` sentinel. A request with `\"max_analyzed_offset\": 0` wraps the analyzer with a zero offset limit and suppresses the normal length exception, returning no highlights instead of rejecting the request with HTTP 400.",
+        "path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java",
+        "start_line": 568,
+        "end_line": 568,
+        "observation_id": "58ab76d00785f4ed",
+        "claimed_path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **server/src/test/java/org/elasticsearch/search/fetch/subphase/highlight/HighlightBuilderTests.java:580** \u2014 The invalid-value test samples from `-100` through `0`, but `-1` and `0` are accepted by the changed validator. If the random input is either value, `expectThrows` receives no exception and the test fails nondeterministically.",
+        "path": "server/src/test/java/org/elasticsearch/search/fetch/subphase/highlight/HighlightBuilderTests.java",
+        "start_line": 580,
+        "end_line": 580,
+        "observation_id": "82007081773a7a68",
+        "claimed_path": "server/src/test/java/org/elasticsearch/search/fetch/subphase/highlight/HighlightBuilderTests.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. Silent highlighting failure when `max_analyzed_offset: 0` is set at query level**  \n**File:** `server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/PlainHighlighter.java` (lines 119-124)  \n**File:** `server/src/main/java/org/elasticsearch/lucene/search/uhighlight/CustomUnifiedHighlighter.java` (lines 125-128)  \n\nThe check `queryMaxAnalyzedOffset.getNotNull() > maxAnalyzedOffset` evaluates to `false` when query value is 0 (since 0 > indexMaxAnalyzedOffset is false for any positive index setting). This allows the request to proceed, but `LimitTokenOffsetAnalyzer` receives 0, which produces **empty highlights with no error**.  \n\n**Failure scenario:** User sets `\"highlight\": { \"field1\": { \"max_analyzed_offset\": 0 } }` \u2192 highlights return empty fragments silently instead of erroring or using the index default.\n\n---",
+        "path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/PlainHighlighter.java",
+        "start_line": 119,
+        "end_line": 119,
+        "observation_id": "2bd58f9752e2e7bf",
+        "claimed_path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/PlainHighlighter.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `QueryMaxAnalyzedOffset.create()` uses unvalidated index setting when query value is negative**  \n**File:** `server/src/main/java/org/elasticsearch/lucene/search/uhighlight/QueryMaxAnalyzedOffset.java` (lines 23-25)  \n\n```java\nreturn new QueryMaxAnalyzedOffset(queryMaxAnalyzedOffset < 0 ? indexMaxAnalyzedOffset : queryMaxAnalyzedOffset);\n```\n\nIf `index.highlight.max_analyzed_offset` is set to 0, -1, or any invalid value at index creation time, passing `-1` at query time propagates that invalid value directly to `LimitTokenOffsetAnalyzer` or the offset check.  \n\n**Failure scenario:** Index created with `\"index.highlight.max_analyzed_offset\": 0` (no validation shown in diff). Query uses `\"max_analyzed_offset\": -1` \u2192 `getNotNull()` returns 0 \u2192 empty highlights or incorrect offset checks.\n\n---",
+        "path": "server/src/main/java/org/elasticsearch/lucene/search/uhighlight/QueryMaxAnalyzedOffset.java",
+        "start_line": 23,
+        "end_line": 23,
+        "observation_id": "2ce1da1f12d7f8f0",
+        "claimed_path": "server/src/main/java/org/elasticsearch/lucene/search/uhighlight/QueryMaxAnalyzedOffset.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. Validation allows 0 but comment and prior behavior reject it**  \n**File:** `server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java` (lines 564-570)  \n\n- Comment: `\"maxAnalyzedOffset\\\" might be non-negative int, null (unknown), or a negative int (defaulting to index analyzed offset).\"` \u2014 implies 0 is valid \"non-negative\"  \n- Validation: `maxAnalyzedOffset < -1` \u2192 allows -1, 0, 1, 2...  \n- Old validation rejected 0 (`<= 0`)  \n- Error message now says `\">= -1\"` but 0 has no documented semantics (analyze 0 chars = disable highlighting?)  \n\n**Failure scenario:** User upgrades, previously got error for `max_analyzed_offset: 0`, now gets silent empty highlights (per defect 1).\n\n---",
+        "path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java",
+        "start_line": 564,
+        "end_line": 564,
+        "observation_id": "251fd8a74ef36383",
+        "claimed_path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**4. Comment claims \"a negative int\" defaults to index, but validation only permits -1**  \n**File:** `server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java` (line 565)  \n\nComment: `\"or a negative int (defaulting to index analyzed offset)\"`  \nCode: rejects -2, -3, etc. with `IllegalArgumentException`  \n\n**Failure scenario:** User tries `max_analyzed_offset: -2` expecting index default (per comment) \u2192 parse error instead.",
+        "path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java",
+        "start_line": 565,
+        "end_line": 565,
+        "observation_id": "514953b2c01dcfaf",
+        "claimed_path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-ub34zj33-bac23cff0830/20260905-185716-2345120",
+  "extractor": "3",
+  "unlocated": []
+}

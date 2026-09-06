@@ -1,0 +1,49 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "**DEFECT 1: EXPAND mode uses constrained cached size instead of unconstrained size**  \nFile: `src/draw/lv_draw_label.c`, line 218 (hunk `@@ -218,10 +218,7 @@`)  \nThe EXPAND path now reads `dsc->text_size.x` which was computed in `lv_label_refr_text` with `max_w` (the object's constrained width). EXPAND mode explicitly requires the *unconstrained* text width (what the text would render at without width limits). The old code correctly passed `LV_COORD_MAX` to `lv_text_get_size`. Result: when a label's text is wider than the object, EXPAND mode will incorrectly use the clamped width, causing incorrect layout/clipping.",
+        "path": "src/draw/lv_draw_label.c",
+        "start_line": 218,
+        "end_line": 218,
+        "observation_id": "83b83fb586a7dec1",
+        "claimed_path": "src/draw/lv_draw_label.c",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 2: Scroll activation uses constrained cached size, preventing scroll**  \nFile: `src/widgets/label/lv_label.c`, line 852 (hunk `@@ -852,9 +853,7 @@`) and line 892 (hunk `@@ -892,9 +891,7 @@`)  \nBoth scroll-mode checks compare `size.x > lv_area_get_width(&txt_coords)` using `label->text_size` (computed with `max_w` = object width). Since `lv_text_get_size` clamps the result to `max_w`, `size.x` can never exceed the object width \u2014 the condition is never true, so scrolling never activates for overflowing text.",
+        "path": "src/widgets/label/lv_label.c",
+        "start_line": 852,
+        "end_line": 852,
+        "observation_id": "16fb90a515b74c20",
+        "claimed_path": "src/widgets/label/lv_label.c",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 3: `invalid_size_cache` flag added but never checked**  \nFile: `src/widgets/label/lv_label_private.h`, line 50 (hunk `@@ -50,6 +50,8 @@`)  \nThe `invalid_size_cache` bitfield is added to `_lv_label_t` but no code in this diff reads or acts on it. If any label property affecting text size (font, letter_space, line_space, text content) changes without `lv_label_refr_text` being called, the cached `text_size` becomes stale with no invalidation mechanism.",
+        "path": "src/widgets/label/lv_label_private.h",
+        "start_line": 50,
+        "end_line": 50,
+        "observation_id": "518a1d37efd54f82",
+        "claimed_path": "src/widgets/label/lv_label_private.h",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 4: `lv_draw_label_dsc_t.text_size` may be uninitialized**  \nFile: `src/draw/lv_draw_label.h`, line 35 (hunk `@@ -35,6 +35,9 @@`)  \nThe new `text_size` field in `lv_draw_label_dsc_t` is only set in `lv_label.c:827`. Other callers of the label draw pipeline (if any) that populate `lv_draw_label_dsc_t` directly will leave `text_size` uninitialized, leading to undefined behavior when `lv_draw_label_iterate_characters` reads it.",
+        "path": "src/draw/lv_draw_label.h",
+        "start_line": 35,
+        "end_line": 35,
+        "observation_id": "549ebf2ceeecbdaf",
+        "claimed_path": "src/draw/lv_draw_label.h",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-eh6jk_cw-761310f54e9b/20260905-184148-2201049",
+  "extractor": "3",
+  "unlocated": []
+}

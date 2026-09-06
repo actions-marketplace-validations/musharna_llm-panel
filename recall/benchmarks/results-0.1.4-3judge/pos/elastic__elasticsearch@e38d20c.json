@@ -1,0 +1,81 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **server/src/main/java/org/elasticsearch/search/SearchService.java:558** \u2014 The compatibility check uses the channel version stored on the original `ShardSearchRequest`, not the channel carrying the current continuation. In a rolling-upgrade cluster, start a scroll through an old coordinator, then continue it through a new coordinator with `error_trace=false`; the stored old version forces `header=true`, so the failure is neither logged nor stripped and its stack trace is incorrectly transported.",
+        "path": "server/src/main/java/org/elasticsearch/search/SearchService.java",
+        "start_line": 558,
+        "end_line": 558,
+        "observation_id": "1763bfda6d1d04d7",
+        "claimed_path": "server/src/main/java/org/elasticsearch/search/SearchService.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **x-pack/plugin/async-search/src/internalClusterTest/java/org/elasticsearch/xpack/search/AsyncSearchErrorTraceIT.java:180, 214, 248** \u2014 These submit a second async search with `wait_for_completion_timeout=0ms` and immediately assert the log expectations without polling that search to completion. On a busy node, lines 180/248 return before shard execution logs anything, causing intermittent failures; line 214 can pass its \u201cunseen\u201d assertion before an incorrect log is emitted, producing a false positive.",
+        "path": "x-pack/plugin/async-search/src/internalClusterTest/java/org/elasticsearch/xpack/search/AsyncSearchErrorTraceIT.java",
+        "start_line": 180,
+        "end_line": 180,
+        "observation_id": "3379350f054fcebb",
+        "claimed_path": "x-pack/plugin/async-search/src/internalClusterTest/java/org/elasticsearch/xpack/search/AsyncSearchErrorTraceIT.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "## Defect 1 \u2014 `addUnseenLoggingExpectations` registers every (node \u00d7 shard) expectation under the *same* name, so the \"no logging\" tests assert absence for exactly one combination\n\n**File:** `test/framework/src/main/java/org/elasticsearch/search/ErrorTraceHelper.java`, hunk `@@ -45,4 +54,63 @@` \u2192 new-file lines \u224896\u2013115; the duplicate literal is at \u2248line 101:\n\n```java\nnew MockLog.UnseenEventExpectation(\n    \"Tracking information ([nodeId][indexName][shard]) and exception logged before stack trace cleared\",\n```\n\nThe loop registers `numShards \u00d7 numNodes` expectations and gives **every one** this identical name. The sibling method in the same diff, `addSeenLoggingExpectations` (\u2248line 65), carefully formats the shard number into the name so each expectation is unique \u2014 the unseen variant has no such discriminator. `MockLog` expectations are addressed by name (the `addExpectation`/`assertAllExpectationsMatched` API and the per-name failure diagnostics), so each identical-name registration replaces the previous one: only the **last (node, shard) pair** is actually asserted; the other `numShards \u00d7 numNodes \u2212 1` combinations are silently dropped.\n\n**Concrete failure scenario:** a regression that makes a data node emit the `Clearing stack trace before transport:` debug line for, say, shard 0 on the first node while `error_trace=true` (exactly the regression `testNoLoggingInSearchFailingQueryErrorTraceTrue` \u2014 `qa/smoke-test-http/.../SearchErrorTraceIT.java` \u2248lines 150\u2013163 \u2014 and `testLoggingInAsyncSearchFailingQueryErrorTraceTrue` \u2014 `x-pack/plugin/async-search/.../AsyncSearchErrorTraceIT.java` \u2248lines 185\u2013216 \u2014 were written to catch) will go undetected if the surviving registration covers a different node/shard: the suite passes green despite the \"no logging\" contract being violated. The Javadoc on the method (\u2248lines 94\u201396) explicitly promises \"an unseen expectation is added for each combination of node \u2026 and shard\", so the effective coverage is one combination, not n\u00d7m. (Decisive check that is impossible here: `MockLog`'s storage \u2014 `Map<String, \u2026>` keyed by name would produce the collapse described; a flat list would not, though it would leave every failure message pointing at the same ambiguous name.)",
+        "path": "test/framework/src/main/java/org/elasticsearch/search/ErrorTraceHelper.java",
+        "start_line": 96,
+        "end_line": 96,
+        "observation_id": "d7dd961eaf928174",
+        "claimed_path": "test/framework/src/main/java/org/elasticsearch/search/ErrorTraceHelper.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "## Defect 2 \u2014 async-search logging tests assert on a background execution they never await\n\n**File:** `x-pack/plugin/async-search/src/internalClusterTest/java/org/elasticsearch/xpack/search/AsyncSearchErrorTraceIT.java`, hunk `@@ -136,6 +150,106 @@` \u2014 `testLoggingInAsyncSearchFailingQueryErrorTraceDefault` at \u2248lines 153\u2013183 (the same pattern in the `False` variant \u2248lines 217\u2013249): the first submit is polled to completion and its events all fire *before* `MockLog.capture`, so the seen expectations can only be satisfied by the **re-submitted** search at \u2248line 180 (`getRestClient().performRequest(searchRequest)`). That request carries `wait_for_completion_timeout=0ms` + `keep_on_completion=true` from the original submit (\u2248lines 167\u2013168), so `performRequest` returns while the search is still executing asynchronously, and `mockLog.assertAllExpectationsMatched()` at \u2248line 181 runs immediately afterwards. Whether the assertion can succeed is therefore decided by an un-awaited, in-flight search: a slow or contended node (CI pause, thread-pool saturation, GC) pushes the shard failures past the assertion window. If `assertAllExpectationsMatched` does not block on the seen-latch the failure is deterministic-timing-dependent; if it does block with a finite timeout it is a flake \u2014 either way the test asserts events produced by execution it never synchronised with, unlike the equivalent synchronous `SearchErrorTraceIT` tests where `performRequest` returns only after the search (and its logs) finished. (Decisive check not available: the `SeenEventExpectation.assertMatched`/`awaitMatched` semantics in `MockLog.java`, which the diff hunk `@@ -316,6 +316,43 @@` only touches partially.)\n\n## What I could not verify (material missing)\n\nThe workspace has no checkout, so the following load-bearing assumptions could not be confirmed against source: (a) whether `MockLog` stores expectations in a name-keyed map (Defect 1 mechanism); (b) whether `assertAllExpectationsMatched` waits on the seen-latch (Defect 2 severity); (c) that the production refactor's `request.getChannelVersion()` (from the stored `ShardSearchRequest` in the scroll/fetch/rank-feature paths) equals the old `channel.getVersion()` for scroll continuations on re-established connections \u2014 on paper it is the version of the *original* query receipt, not the continuation's channel, a divergence that only matters in a mixed-version window and which I did not report as a defect for that reason.",
+        "path": "x-pack/plugin/async-search/src/internalClusterTest/java/org/elasticsearch/xpack/search/AsyncSearchErrorTraceIT.java",
+        "start_line": 153,
+        "end_line": 153,
+        "observation_id": "3bb37580f5faec06",
+        "claimed_path": "x-pack/plugin/async-search/src/internalClusterTest/java/org/elasticsearch/xpack/search/AsyncSearchErrorTraceIT.java",
+        "path_resolution": "exact",
+        "merged_from": [
+          "16b7e6d8afc53a11"
+        ]
+      },
+      {
+        "content": "**DEFECT 1: `test/framework/src/main/java/org/elasticsearch/search/ErrorTraceHelper.java:107-110`**  \n`addUnseenLoggingExpectations` builds regex patterns with **unescaped brackets**. The pattern `format(\"[%s][%s][%d] ...\", nodeId, index, shard)` produces e.g. `[node1][test2][0] Clearing stack trace before transport:`. When `MockLog.UnseenEventExpectation` compiles this as a regex (via `Pattern.compile`), `[node1]` is a character class matching any of `n,o,d,e,1` \u2014 not the literal string `[node1]`.  \n**Failure scenario:** A test calls `addUnseenLoggingExpectations` (used when `error_trace=true` to verify no logging occurs). Logging *does* occur (bug in production code), but the malformed regex fails to match the actual log line, so `assertAllExpectationsMatched()` passes incorrectly \u2014 the test gives a false green.\n\n---",
+        "path": "test/framework/src/main/java/org/elasticsearch/search/ErrorTraceHelper.java",
+        "start_line": 107,
+        "end_line": 107,
+        "observation_id": "22cc8554b2e1da67",
+        "claimed_path": "test/framework/src/main/java/org/elasticsearch/search/ErrorTraceHelper.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 2: `server/src/test/java/org/elasticsearch/search/SearchServiceTests.java:177-178`**  \nTest expectation hardcodes `\\[node\\]` for the node ID: `format(\"\\\\[node\\\\]\\\\[%s\\\\]\\\\[%d\\\\] ...\", index, shardId)`. Production code logs `clusterService.localNode().getId()` (line 563 in `SearchService.java`). The test passes `createClusterService(threadPool)` as the cluster service \u2014 if that mock returns any node ID other than `\"node\"`, the pattern mismatch causes `assertAllExpectationsMatched()` to fail.  \n**Failure scenario:** Run the test with a `ClusterServiceUtils.createClusterService` implementation that returns a different node ID (e.g., `\"test-node\"`). The test fails despite correct production behavior.\n\n---",
+        "path": "server/src/test/java/org/elasticsearch/search/SearchServiceTests.java",
+        "start_line": 177,
+        "end_line": 177,
+        "observation_id": "bcdb5004bfdcd6a9",
+        "claimed_path": "server/src/test/java/org/elasticsearch/search/SearchServiceTests.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 3: `server/src/main/java/org/elasticsearch/action/search/SearchTransportService.java:459,471`**  \n`ChannelActionListener` is constructed with only `channel`, dropping the second `channel.getVersion()` argument. The diff does not show `ChannelActionListener`'s constructor. If it requires two arguments (as the old call site implied), this is a compile error or runtime `NoSuchMethodError`.  \n**Failure scenario:** Compile the module, or run any search transport path \u2014 classloading fails at `SearchTransportService.registerRequestHandler` if the two-arg constructor was the only one.\n\n---\n\n**DEFECT 4: `test/framework/src/main/java/org/elasticsearch/search/ErrorTraceHelper.java:83-86`** (latent fragility)  \n`addSeenLoggingExpectations` builds `nodesDisjunction = format(\"(%s)\", nodeIds.joining(\"|\"))` \u2192 `(node1|node2)`. This is then embedded in `format(\"\\\\[%s\\\\]...\", nodesDisjunction)` \u2192 `\\[(node1|node2)\\]...`. This *currently works* because the outer `\\[` `\\]` are escaped literals and the inner parentheses form a regex group. However, if any node ID contains regex metacharacters (e.g., `node-1`, `node[1]`), the disjunction becomes an invalid or wrong regex.  \n**Failure scenario:** Cluster node named `node[1]` \u2014 `nodesDisjunction` becomes `(node[1]|node2)`, regex `\\[(node[1]|node2)\\]` matches `[node1]` or `[node2]` (character class `[1]`), not the literal node ID.",
+        "path": "server/src/main/java/org/elasticsearch/action/search/SearchTransportService.java",
+        "start_line": 459,
+        "end_line": 459,
+        "observation_id": "332aa59d6f0cd722",
+        "claimed_path": "server/src/main/java/org/elasticsearch/action/search/SearchTransportService.java",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-joxud7nk-bf63b031ebaa/20260905-194723-2728563",
+  "extractor": "3",
+  "unlocated": []
+}

@@ -45,6 +45,7 @@ was measured, and what was withdrawn.
 | directory                   | what it is                                                                               |
 | --------------------------- | ---------------------------------------------------------------------------------------- |
 | `results-clean-3judge/`     | the headline result — clean 3-judge run                                                  |
+| `results-0.1.4-3judge/`     | 0.1.4 under the corrected defect prompt — recall flat, volume up, precision halved       |
 | `results-clean-2judge/`     | the roster-matched control, two judges                                                   |
 | `results-broad-3judge/`     | broad prompt vs defect prompt, the same panel asked a wider question                     |
 | `results-volume-3judge/`    | the volume arm — the defect prompt told not to stop                                      |

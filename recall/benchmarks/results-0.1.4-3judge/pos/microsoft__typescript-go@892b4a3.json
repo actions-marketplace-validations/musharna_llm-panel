@@ -1,0 +1,86 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- `internal/fourslash/_scripts/convertFourslash.mts:24` \u2014 `getManualTests()` unconditionally reads `manualTests.txt`, but this change does not add that file and `makeManual.mts` explicitly treats it as optional. On a checkout where no manual test has yet been created, `npm run convertfourslash` throws `ENOENT` before generating tests.",
+        "path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "start_line": 24,
+        "end_line": 24,
+        "observation_id": "4f0ae785dbc303d4",
+        "claimed_path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `internal/fourslash/_scripts/makeManual.mts:40` \u2014 The command requires a generated filename such as `foo_test.go` to locate the source file, then stores that filename in `manualTests.txt`. The converter checks for the capitalized parsed test name, such as `Foo`, so it does not recognize the entry. After `npm run makemanual -- foo_test.go`, the next conversion regenerates `gen/foo_test.go` even though `manual/foo_test.go` exists.",
+        "path": "internal/fourslash/_scripts/makeManual.mts",
+        "start_line": 40,
+        "end_line": 40,
+        "observation_id": "866c51b9bca48fbf",
+        "claimed_path": "internal/fourslash/_scripts/makeManual.mts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**1. Dead manual-test skip \u2014 name-format mismatch between the recorder and the checker**\n`internal/fourslash/_scripts/convertFourslash.mts:70` and `internal/fourslash/_scripts/convertFourslash.mts:72` vs `internal/fourslash/_scripts/makeManual.mts:16-18` and `internal/fourslash/_scripts/makeManual.mts:38-41`\n\nThe converter builds its lookup key as `test.name[0].toUpperCase() + test.name.substring(1)` \u2014 a capitalized bare name like `GoToDefinition`, no `_test.go` suffix \u2014 and tests `manualTests.has(testName)`. The generated file it writes is `path.join(outputDir, \\`${test.name}_test.go\\`)`, i.e. `goToDefinition_test.go`. The recorder in `makeManual.mts` is given that filename as `args[0]` (it must exist in `genDir`, or the script exits with \"Make sure the test exists in the gen directory first\"), and pushes exactly that string \u2014 `goToDefinition_test.go` \u2014 into `manualTests.txt`. `\"GoToDefinition\"` never equals `\"goToDefinition_test.go\"`, and there is no argument form the recorder will accept that produces the converter's key (a capitalized bare-name arg fails the `existsSync` gate at makeManual.mts:19).\n\nFailure scenario: `npm run makemanual -- goToDefinition_test.go` moves the file to `tests/manual/` and records it. Any subsequent `npm run convertfourslash` run regenerates `tests/gen/goToDefinition_test.go` because the skip at convertFourslash.mts:72 never matches. The hand-edited manual copy is orphaned and silently stale, and the regeneration the feature exists to prevent happens anyway; if both directories are compiled as Go tests, the duplicate test function is also a \"redefined\" build error.",
+        "path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "start_line": 70,
+        "end_line": 70,
+        "observation_id": "063de0fbd7c1a49b",
+        "claimed_path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 1: `makeManual.mts:17` \u2014 Wrong filename when looking up generated test**\n```mts\nconst testFileName = testName;\nconst genTestFile = path.join(genDir, `${testFileName}`);\n```\nThe generated test files in `genDir` are named `${test.name}_test.go` (per `convertFourslash.mts:70`). If a user runs `npm run makemanual MyTest`, the script looks for `gen/MyTest` but the actual file is `gen/MyTest_test.go` \u2192 **file not found error** even though the test exists.",
+        "path": "internal/fourslash/_scripts/makeManual.mts",
+        "start_line": 17,
+        "end_line": 17,
+        "observation_id": "7efff3de12fb260e",
+        "claimed_path": "makeManual.mts",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 2: `makeManual.mts:32` \u2014 Case-sensitivity mismatch with `convertFourslash`**\n```mts\nmanualTests.push(testName);  // stores raw argument, e.g. \"myTest\"\n```\n`convertFourslash.mts:61` capitalizes the parsed test name: `test.name[0].toUpperCase() + test.name.substring(1)`. If the parsed test name is `\"myTest\"`, it becomes `\"MyTest\"` for the `manualTests.has()` check. But `makemanual` stores the raw argument `\"myTest\"` \u2192 **manual test not skipped on next generation run** because `\"MyTest\" !== \"myTest\"`.",
+        "path": "internal/fourslash/_scripts/makeManual.mts",
+        "start_line": 32,
+        "end_line": 32,
+        "observation_id": "666b2e5125c0cf1a",
+        "claimed_path": "makeManual.mts",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 3: `convertFourslash.mts:61` \u2014 Double-capitalization if test name already capitalized**\n```mts\nconst testName = test.name[0].toUpperCase() + test.name.substring(1);\n```\nIf `parseFileContent` returns a test name that already starts with uppercase (e.g., `\"MyTest\"`), this produces `\"MMyTest\"`. The `manualTests.has()` check then uses this mangled name, so a correctly-cased entry in `manualTests.txt` (`\"MyTest\"`) **won't match** \u2192 manual test gets regenerated instead of skipped.",
+        "path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "start_line": 61,
+        "end_line": 61,
+        "observation_id": "e54d5b3646b1c45e",
+        "claimed_path": "convertFourslash.mts",
+        "path_resolution": "basename",
+        "merged_from": []
+      },
+      {
+        "content": "**Defect 4: `convertFourslash.mts:48` \u2014 `manualOutputDir` created but never used**\n```mts\nfs.mkdirSync(manualOutputDir, { recursive: true });\n```\nThe directory is created but `convertFourslash` never writes to it. Manual tests are only moved there by `makemanual` *after* generation. If a test is already in `manualTests.txt` on first run, it's skipped (Defect 3) and **never generated**, so `makemanual` cannot move it (Defect 1) \u2192 **manual tests added externally can never be materialized**.",
+        "path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "start_line": 48,
+        "end_line": 48,
+        "observation_id": "4a19eb20068c9998",
+        "claimed_path": "convertFourslash.mts",
+        "path_resolution": "basename",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-sgl4sflf-880f21968cd6/20260905-191028-2430613",
+  "extractor": "3",
+  "unlocated": [
+    {
+      "content": "**2. `makeManual.mts` silently overwrites the existing manual copy on re-run**\n`internal/fourslash/_scripts/makeManual.mts:30`\n\n`fs.renameSync(genTestFile, manualTestFile)` \u2014 `rename` on POSIX overwrites the destination without warning. Once defect 1 has regenerated `gen/foo_test.go` on a later convert run, a second `npm run makemanual -- foo_test.go` destroys the hand-written edits in `tests/manu",
+      "observation_id": "2ad796bc34e9bf9d",
+      "claimed_path": "makeManual.mts",
+      "path_resolution": "basename"
+    }
+  ]
+}

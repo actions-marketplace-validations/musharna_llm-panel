@@ -1,0 +1,115 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "- **P1 \u2014 `ml/backend/ggml/ggml.go:1007` (also lines 1021 and 1035):** `ggml_get_data` can return a non-nil device pointer for GPU-backed tensors; it does not prove the memory is CPU-accessible. Loading a model weight onto CUDA and calling `Bytes()` (for example through `ml.Dump`) makes `C.GoBytes` dereference GPU memory and can crash the process. `Floats()` and `Ints()` similarly expose an invalid host slice.",
+        "path": "ml/backend/ggml/ggml.go",
+        "start_line": 1007,
+        "end_line": 1007,
+        "observation_id": "698acb22ce573953",
+        "claimed_path": "ml/backend/ggml/ggml.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- **P2 \u2014 `model/model.go:285`:** Passing `input.Batch{}` now calls `Dim` on a nil `Positions` tensor and panics. The same empty batch previously reached the explicit validation and returned `\"batch size cannot be less than 1\"`.## Defect 1: Zero-copy `unsafe` views into ggml memory are retained across calls by the cache \u2014 stale/aliased positions\n\n- **File/line:** `ml/backend/ggml/ggml.go` (new `Ints()`/`Floats()` CPU branches, ~lines 1021\u20131026 and 1032\u20131043, from hunk `@@ -1015,6 +1018,23 @@`) and `kvcache/causal.go:203` (`c.curPositions = batch.Positions.Ints()`).\n\nThe `sync != nil` branch copies into an owned Go slice; the new CPU branch (`else if bts := C.ggml_get_data(t.t); bts != nil`) returns `unsafe.Slice` \u2014 a view borrowing ggml's buffer, not a copy. `Causal.StartForward` stores that view in the long-lived field `c.curPositions` (the pre-image stored the caller's immutable `[]int32`, which had independent lifetime). By its name and prior use this field survives past the call.\n\n**Failure scenario:** the runner builds `batch.Positions` on the reused input staging context (`runner/ollamarunner/runner.go`, `nextBatch.ctx.Input().FromIntSlice(...)` \u2014 the same staging context the runner explicitly re-stages between batches, per the in-code comment \"Actual batchInputs values will be injected into the batch.Inputs tensor before calling Compute\"). When the tensor is CPU-resident (exactly the case the new branch exists for), `c.curPositions` is a live pointer into that buffer; the next batch staging new positions into the same context, or the context's memory being freed/reused, silently rewrites what the cache reads \u2192 attention/cache lookups keyed to wrong positions with no error. The old code could not see this because `Ints()` previously returned nil in the CPU case \u2014 the diff both adds the view and feeds it into a retained field. (I could not verify the exact later read site of `curPositions` \u2014 that method set isn't in the diff \u2014 but the retention itself is new and unsafe.)\n\n## Defect 2: gptoss drops the empty-`Outputs` guard \u2014 nil becomes an empty tensor on the final block\n\n- **File/line:** `model/models/gptoss/model.go` (hunk `@@ -41,11 +40,11 @@`, new lines 43\u201344): old code `if len(batch.Outputs) > 0 && i == len(m.TransformerBlocks)-1` set `outputs`; new code sets `outputs = batch.Outputs` whenever `i == len(m.TransformerBlocks)-1`, without any length check and without a nil guard.\n\n**Failure scenario:** a gptoss batch where no token is a sequence-final token (`runner.go`: `batchOutputs` is appended only when `i+1 == len(seq.inputs)`, so a prefill chunk that is split at `maxBatchSize`, or a prompt extension mid-way, yields `Dim(0) == 0`). The final block now receives a non-nil, zero-length gather-index tensor where it previously received `nil`. If `block.Forward` branches on `outputs != nil` (the standard pattern, and the only reason the old guard existed), it now gathers zero rows \u2192 empty `hiddenStates` \u2192 the runner's `vocabSize := len(outputs) / activeBatch.batch.Outputs.Dim(0)` (`runner.go:711`) performs integer division by zero and panics, instead of skipping the gather. (The pre-existing `0/0` in `computeBatch` for the same empty case means this exact path may have been unreachable before; the diff nonetheless removes the model's own safety guard, and any other gptoss caller feeding an empty-but-set `Outputs` tensor now takes the panic path.)\n\n## Defect 3: `Forward` length checks now call `Dim(0)` on a possibly-nil tensor \u2014 panic instead of error\n\n- **File/line:** `model/model.go` (hunk `@@ -282,11 +282,11 @@`, new lines 285 and 289). `batch.Positions.Dim(0)` replaces `len(batch.Positions)`; `input.Batch.Positions` is now a `ml.Tensor` (`model/input/input.go`, hunk `@@ -54,19 +54,19 @@`).\n\nThe old check was nil-safe (`len(nil)` == 0 \u2192 the friendly \"length of positions (0) must match\u2026\" error / \"batch size cannot be less than 1\"). A zero-value `input.Batch` (or any caller that doesn't set `Positions`) now dispatches `Dim(0)` on a nil interface \u2192 runtime panic. **Failure scenario:** any batch constructed without a `Positions` tensor (e.g., a test/tool/other runner not migrated in this diff \u2014 only `ollamarunner` is updated here; other call sites of `model.Forward`/`input.Batch` are not visible in the diff) \u2192 hard panic in `Forward` where the old code returned a recoverable error. Note the struct change to `Positions`/`Outputs` as tensors also breaks compilation of every unmigrated `input.Batch{Positions: []int32{...}}` literal outside this diff \u2014 unverifiable here since the repo is absent, but a compile or nil-panic break is guaranteed for any such site.\n\n## Minor: `ml.Tensor` interface extension breaks other implementers\n\n- **File/line:** `ml/backend.go:404` (`Ints() []int32` added to the `Tensor` interface). The diff implements it only in `ggml.go` and the test fake tensor. Any other backend's tensor type (CPU/non-ggml implementations) no longer satisfies `ml.Tensor` \u2192 compile error. This diff shows no such updates.\n\nAlso unverifiable from the diff (worth checking, but I will not assert these as defects): (a) `ctx.Input().Arange(0, float32(s.parallel), 1, ml.DTypeI32)` in `reserveWorstCaseGraph` (`runner.go` ~line 1067) \u2014 the old code produced exactly `s.parallel` elements `[0..s.parallel-1]`; a non-exclusive-stop `Arange` would produce `parallel+1` and a wrong (self-referential) reserve shape \u2014 the `Arange` signature/semantics is not in the diff; (b) `FromIntSlice`/`Empty` behaviour with length 0.\n\nMissing material to fully confirm items 1\u20133: the kvcache cache methods that read `curPositions`/`curPos` after `StartForward`, the ggml `FromIntSlice`/`Input()`/`Arange` implementations, `block.Forward`'s nil-vs-empty handling in gptoss, and all other callers of `input.Batch`/`model.Forward` in the repo.### 1. Multiple models: Empty tensor passed instead of nil for outputs on last layer (High severity)\n\n**Files & lines (from diff hunks):**",
+        "path": "model/model.go",
+        "start_line": 285,
+        "end_line": 285,
+        "observation_id": "7e3db6deaaf27b59",
+        "claimed_path": "model/model.go",
+        "path_resolution": "exact",
+        "merged_from": [
+          "ea0478487ecf5a89",
+          "ac6f1e28284f000a",
+          "79016c3558587387",
+          "c9b448d9fed63338",
+          "85f3ef54f169410b",
+          "448151c5da123001"
+        ]
+      },
+      {
+        "content": "- `model/models/gemma2/model.go:190-193`",
+        "path": "model/models/gemma2/model.go",
+        "start_line": 190,
+        "end_line": 190,
+        "observation_id": "9578ec1b117a3c69",
+        "claimed_path": "model/models/gemma2/model.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `model/models/gptoss/model.go:40-44`",
+        "path": "model/models/gptoss/model.go",
+        "start_line": 40,
+        "end_line": 40,
+        "observation_id": "535044af70d903a6",
+        "claimed_path": "model/models/gptoss/model.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `model/models/llama/model.go:158-161`",
+        "path": "model/models/llama/model.go",
+        "start_line": 158,
+        "end_line": 158,
+        "observation_id": "44d7589f2953de05",
+        "claimed_path": "model/models/llama/model.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `model/models/qwen2/model.go:109-112`",
+        "path": "model/models/qwen2/model.go",
+        "start_line": 109,
+        "end_line": 109,
+        "observation_id": "dd57ca79d86b2f3a",
+        "claimed_path": "model/models/qwen2/model.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "- `model/models/qwen3/model.go:163-166`\n\n**Defect:** The `if len(batch.Outputs) > 0` guard was removed when assigning `outputs` for the final layer. Now `outputs = batch.Outputs` unconditionally on the last layer, passing an **empty tensor** (Dim(0)==0) instead of `nil` when no sequences in the batch require logits.\n\n**Failure scenario:** Prefill batch where all sequences have more tokens to process (no sequence completes in this batch). `batch.Outputs` is an empty tensor. The layer's `Forward` receives `outputs` as a non-nil empty tensor. If the layer checks `if outputs != nil` to decide whether to gather output positions (common pattern), it will attempt to index with empty indices \u2192 panic (index out of range) or return wrongly-shaped output (empty instead of full hidden state).\n\n**Why it's a regression:** Previously `outputs` stayed `nil` when `len(batch.Outputs) == 0`; now it's an empty tensor. The tensor API change (`[]int32` \u2192 `ml.Tensor`) made `len()` invalid, but the fix should have been `if batch.Outputs.Dim(0) > 0`, not removing the check entirely.\n\n---",
+        "path": "model/models/qwen3/model.go",
+        "start_line": 163,
+        "end_line": 163,
+        "observation_id": "6bd00da462de00c4",
+        "claimed_path": "model/models/qwen3/model.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 2. Runner: Division by zero when no outputs in batch (High severity)\n\n**File & line:** `runner/ollamarunner/runner.go:708` (hunk shows line 705 in old, 708 in new)\n\n**Code:** `vocabSize := len(outputs) / activeBatch.batch.Outputs.Dim(0)`\n\n**Defect:** No guard against `activeBatch.batch.Outputs.Dim(0) == 0`.\n\n**Failure scenario:** A prefill batch where no sequence completes (all sequences have pending inputs). `batchOutputs` slice is empty \u2192 `batch.Outputs` is empty tensor (Dim(0)==0). Model returns empty logits (`len(outputs)==0`). `computeBatch` executes sampling loop \u2192 `0 / 0` \u2192 **panic: runtime error: integer divide by zero**.\n\n---",
+        "path": "runner/ollamarunner/runner.go",
+        "start_line": 708,
+        "end_line": 708,
+        "observation_id": "2b8b50e1162f706b",
+        "claimed_path": "runner/ollamarunner/runner.go",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "### 3. llama4: Attention scales loop index out of range if positions tensor not 1D (Medium severity)\n\n**File & line:** `model/models/llama4/model_text.go:221-225`\n\n**Code:**\n```go\nscales := make([]float32, batch.Positions.Dim(0))\nfor i, p := range batch.Positions.Ints() {\n    scales[i] = ...\n}\n```\n\n**Defect:** `scales` sized to `Dim(0)` (first dimension only), but loop iterates over **all elements** from `Ints()` (flattens all dimensions). If `batch.Positions` is ever multi-dimensional (e.g., `[batch, seq_len]`), `len(Ints()) > Dim(0)` \u2192 `scales[i]` panics with index out of range.\n\n**Failure scenario:** Any caller constructs `batch.Positions` as a 2D tensor (valid `ml.Tensor` but violates implicit 1D assumption). The runner currently uses `FromIntSlice` (1D), but the `Batch` struct imposes no rank constraint.\n\n---",
+        "path": "model/models/llama4/model_text.go",
+        "start_line": 221,
+        "end_line": 221,
+        "observation_id": "daf11a8bad2e97bf",
+        "claimed_path": "model/models/llama4/model_text.go",
+        "path_resolution": "exact",
+        "merged_from": [
+          "06b6f6afca73f783"
+        ]
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-i7atvtm4-402c13b6b7ba/20260905-192940-2532952",
+  "extractor": "3",
+  "unlocated": [
+    {
+      "content": "### 4. kvcache/encoder.go: Panic if multimodal index out of bounds (Pre-existing, not new)\n\n**File & line:** `kvcache/encoder.go:94`\n\n**Code:** `c.curPos = batch.Positions.Ints()[batch.Multimodal[len(batch.Multimodal)-1].Index]`\n\n**Defect:** No bounds check that `MultimodalIndex.Index < len(batch.Positions.Ints())`. Same bug existed with old `[]int32` slice. Not introduced by this diff, but worth ",
+      "observation_id": "6fb433973d26526f",
+      "claimed_path": "kvcache/encoder.go",
+      "path_resolution": "exact"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "review": {
+    "comments": [
+      {
+        "content": "**1. `src/misc/lv_text.c:653` \u2014 the guard changes end-of-string semantics, not just NULL handling, and the diff's own tests prove it**\n\nThe condition `txt[*i] == '\\0'` is not a NULL-pointer concern, but it intercepts every legitimate read at the terminator. Before this change, a NUL at `*i` fell into the `LV_IS_ASCII` branch (`'\\0'` is 0x00, in ASCII range), returned 0, and **advanced `*i` past the terminator**. After this change, `*i` is frozen at the terminator forever.\n\nConcrete evidence inside the diff: `test_txt.c:164` asserts `ofs == 0` for an empty string, with the comment \"ofs unchanged\" \u2014 i.e., the author is codifying that the cursor no longer advances at end-of-string. Run this test against the pre-change code and it fails (`ofs` would be 1, and 2 with a write-back helper). So a NULL-safety fix shipped with an unadvertised behavior change on the *valid* empty/terminated-string path.\n\nFailure scenario: any existing caller that iterates by calling this function with the cursor already at the terminator (the previous contract was \"NUL is consumed like any ASCII char, `(*i)++`\") now gets `result == 0` with no cursor progress \u2014 a do-while loop that terminates on \"the terminator was consumed\" spins forever, and any caller that uses the post-call `*i` as \"position after last character\" gets a different value for identical input. The comment above the line (\"Ensure the string is not null\") doesn't describe the `txt[*i] == '\\0'` half of the condition, which is the half that changes behavior. I could not enumerate the specific production callers of this static function because the source tree is absent from the workspace, so the hang is demonstrated by contract + the diff's own tests rather than a named caller.",
+        "path": "src/misc/lv_text.c",
+        "start_line": 653,
+        "end_line": 653,
+        "observation_id": "f25d9d12b7937f61",
+        "claimed_path": "src/misc/lv_text.c",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**2. `tests/src/test_cases/test_txt.c:203` \u2014 the `ofs == 2` assertion contradicts the bytes the test itself decodes**\n\nInput `\"\u00e9A\"` (0xC3 0xA9 0x41): decoding `'\u00e9'` advances the offset by 2, decoding `'A'` advances it by 1 \u2014 3 bytes consumed in total, and the test asserts both letters were decoded (`letter == 0xE9`, `letter_next == 'A'`), yet asserts `ofs == 2`. That is only consistent if `lv_text_encoded_letter_next_2` decodes `letter_next` with a local offset that it deliberately does not write back \u2014 but that helper is **not modified by this diff**. If the existing helper passes the same `ofs` through both decode calls (the natural implementation, and the one consistent with how `ofs` is described in tests 1\u20134), the actual result for `\"\u00e9A\"` is `ofs == 3` and this new test fails outright. So the test either fails against the unmodified helper, or it passes while asserting an offset contract the helper does not implement. This is the only test in the set that discriminates the two implementations, and its expectation is unverified \u2014 I could not run it or read the helper body (not present in the workspace).",
+        "path": "tests/src/test_cases/test_txt.c",
+        "start_line": 203,
+        "end_line": 203,
+        "observation_id": "1fe3588d0b00cb9d",
+        "claimed_path": "tests/src/test_cases/test_txt.c",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**3. `tests/src/test_cases/test_txt.c:146\u2013151` \u2014 the NULL test validates the wrong layer; nothing in this diff makes the tested function NULL-safe**\n\nThe tests call `lv_text_encoded_letter_next_2(txt=NULL, ...)` and assert it returns cleanly, but the only code changed is the *static* helper `lv_text_utf8_next` inside it. Whether the unmodified `lv_text_encoded_letter_next_2` is NULL-transparent depends on its body, which is not in the diff: if it dereferences `txt` anywhere itself (any prelude, `txt[*ofs]`, length computation), the new test **segfaults the test binary**; if it forwards `txt` untouched, the test passes but only proves the innermost decoder is guarded. The same hole exists in production: the guard does not protect callers that dereference `txt` in their own loop conditions before ever reaching `lv_text_utf8_next` (e.g. any `while(txt[ofs] != '\\0')` iteration on a NULL label still crashes), so the NULL \"fix\" is demonstrated only at a layer the change does not actually cover. Without the helper body and the caller list (both absent here), the NULL-safety claim is unproven by this diff.",
+        "path": "tests/src/test_cases/test_txt.c",
+        "start_line": 146,
+        "end_line": 146,
+        "observation_id": "7a29c6a179d3aa01",
+        "claimed_path": "tests/src/test_cases/test_txt.c",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 1: `src/misc/lv_text.c:653` \u2014 Uninitialized variable `result` returned on NULL/empty input**\n\nThe added early-return returns `result` which has not been initialized at this point in the function. If `txt == NULL` or `txt[*i] == '\\0'`, the function returns indeterminate stack garbage.",
+        "path": "src/misc/lv_text.c",
+        "start_line": 653,
+        "end_line": 653,
+        "observation_id": "b0ff1766a1d0b8e9",
+        "claimed_path": "src/misc/lv_text.c",
+        "path_resolution": "exact",
+        "merged_from": []
+      },
+      {
+        "content": "**DEFECT 3: `src/misc/lv_text.c:653` \u2014 Missing `ofs`/`i` update on early return**\n\nThe function signature takes `uint32_t *i` (output offset). On NULL/empty input the early return leaves `*i` unmodified, but callers likely expect it to stay at 0 or be set to string length. Inconsistent with the non-error path where `*i` is advanced.",
+        "path": "src/misc/lv_text.c",
+        "start_line": 653,
+        "end_line": 653,
+        "observation_id": "4d966689bd6ae7a7",
+        "claimed_path": "src/misc/lv_text.c",
+        "path_resolution": "exact",
+        "merged_from": []
+      }
+    ]
+  },
+  "rundir": "/home/user/.cache/llm-panel/runs/aacr-up-kr2fl5r4-354c3e369795/20260905-201316-2892854",
+  "extractor": "3",
+  "unlocated": [
+    {
+      "content": "**DEFECT 2: `tests/src/test_cases/test_txt.c` \u2014 Tests target wrong function**\n\nAll new tests call `lv_text_encoded_letter_next_2`, but the code change modifies `lv_text_utf8_next`. The tests do not exercise the added null/empty guard, leaving the defect above uncovered.",
+      "observation_id": "366398ada742427d",
+      "claimed_path": "tests/src/test_cases/test_txt.c",
+      "path_resolution": "exact"
+    }
+  ]
+}
