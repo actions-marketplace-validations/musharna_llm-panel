@@ -5,7 +5,18 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/musharna/llm-panel/blob/main/LICENSE)
 [![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/musharna/llm-panel/blob/main/pyproject.toml)
 
-Put the same question to several models independently, then read every answer in full.
+Several independent LLM code reviews of one diff, on one page, with a measured miss rate.
+
+```sh
+uv tool install llm-panel            # or: pipx install llm-panel
+llm-panel --judges codex --diff "What is wrong with this change?"   # one judge you already have
+panel-report --open                  # the run as one HTML page
+```
+
+Any one of `codex`, `claude`, `opencode` or `ollama` on your PATH is enough to start; the
+[roster](#configure-your-roster) is where you add the rest. Unlike a single-reviewer bot,
+the panel is N readers who cannot see each other, a rebuttal round in which they defend or
+withdraw, and a [recall benchmark](#on-real-prs-aacr-bench) that says what they miss.
 
 Judges run in parallel, never see each other's work, and answer from their own reading of
 your repo. An optional second round shows each of them the others' findings — anonymised —
@@ -30,11 +41,12 @@ one on a ChatGPT plan) landing as they finish, the scoreboard from `panel.md`, a
 
 ![terminal: llm-panel asks three judges in parallel, reports each as it lands, then head -n 12 panel.md shows the scoreboard and panel-report writes the HTML page](https://raw.githubusercontent.com/musharna/llm-panel/main/docs/demo.gif)
 
-The rendered report — the scoreboard counts spend and names who answered; the
-citation-overlap tables show where the panel's attention landed (three judges reviewing a
-[cline](https://github.com/cline/cline) PR, converging on one line of `TerminalProcess.ts`):
+The rebuttal round as rendered — every position each judge took on each finding, grouped
+by the finding under dispute, disagreements marked CONTESTED. This run: four free-tier
+judges asked to review llm-panel's own failure-classification code; one failed and is
+reported as `harness`, the other three upheld 7 findings, rejected 4, and missed 6:
 
-![panel report: scoreboard, bench, and citation-overlap tables](https://raw.githubusercontent.com/musharna/llm-panel/main/docs/report.png)
+![rebuttal round: positions grouped by the finding being argued about](https://raw.githubusercontent.com/musharna/llm-panel/main/docs/rebuttal.png)
 
 **Contents:** [What's here](#whats-here) · [Install](#install) ·
 [Configure your roster](#configure-your-roster) · [Using it](#using-it) ·
@@ -88,8 +100,9 @@ and you need at most one to start:
 | `claude`   | Anthropic's CLI                              | a claude.ai subscription (setting `ANTHROPIC_API_KEY` switches it to metered) |
 | `ollama`   | local models                                 | free, and no tool loop — see the caveat below                                 |
 
-If none are present the panel still runs, fails loudly, exits 4, and tells you what to
-install. A missing tool is one judge's problem, never the whole panel's.
+A judge whose tool is missing is reported as `harness` and the panel exits 4 — one judge's
+problem, never the whole panel's. If no selected judge has its tool, the panel exits 14
+and names each one with its install hint.
 
 Two transports skip the CLI: `ollama` uses its local HTTP API, and `orvision` calls
 OpenRouter's HTTP API directly with your OpenRouter key so that the `vis-*` judges (grok,
@@ -247,7 +260,11 @@ by the finding under dispute, disagreements marked CONTESTED. This run: four fre
 judges asked to review llm-panel's own failure-classification code; one failed and is
 reported as `harness`, the other three upheld 7 findings, rejected 4, and missed 6:
 
-![rebuttal round: positions grouped by the finding being argued about](https://raw.githubusercontent.com/musharna/llm-panel/main/docs/rebuttal.png)
+The rendered report — the scoreboard counts spend and names who answered; the
+citation-overlap tables show where the panel's attention landed (three judges reviewing a
+[cline](https://github.com/cline/cline) PR, converging on one line of `TerminalProcess.ts`):
+
+![panel report: scoreboard, bench, and citation-overlap tables](https://raw.githubusercontent.com/musharna/llm-panel/main/docs/report.png)
 
 ## What it actually catches
 
