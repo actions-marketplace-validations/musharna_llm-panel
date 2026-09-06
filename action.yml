@@ -1,7 +1,6 @@
 name: "llm-panel review"
 description: >-
-  Put a pull request's diff to a panel of independent LLM judges and post every answer,
-  in full, as one PR comment. No consensus, no scoring: each judge's review verbatim.
+  Independent LLM judges review a pull request's diff; every answer posted verbatim as one comment.
 author: Jaret Arnold
 branding:
   icon: users
