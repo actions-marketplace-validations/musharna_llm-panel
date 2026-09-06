@@ -58,7 +58,7 @@ citation-overlap tables show where the panel's attention landed (three judges re
 | `recall/aacr-upstream` | runs the panel over AACR-Bench PRs and hands the findings to **upstream's** evaluator  |
 | `recall/aacr-score`    | invokes that evaluator, and refuses to report a number from a judge that isn't running |
 | `claimlib.py`          | the one measurement boundary: reviews → span-grounded observations                     |
-| `*-controls`           | the regression suites — 1088 controls, every one tied to a defect that shipped         |
+| `*-controls`           | the regression suites — 1089 controls, every one tied to a defect that shipped         |
 
 ## Install
 
@@ -214,7 +214,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: musharna/llm-panel@main # pin to a tag once one carries action.yml
+      - uses: musharna/llm-panel@v0.1.6
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
           # judges: or-glm,or-kimi,or-deepseek   timeout: "600"   extra-args: --rebut

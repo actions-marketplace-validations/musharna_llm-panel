@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 — 2026-09-06
 
-- **A GitHub Action.** `uses: musharna/llm-panel@<tag>` with an OpenRouter key builds a
+- **A GitHub Action.** `uses: musharna/llm-panel@v0.1.6` with an OpenRouter key builds a
   prompt from the pull request's diff, runs the panel in the checked-out tree and posts
   every answer in full as one comment, edited on each push. Exit 9 (the PR's tree carries
   configuration the judges would run) fails the job; 0 and 4 post. This repository runs it
