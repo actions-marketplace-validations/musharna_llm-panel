@@ -214,14 +214,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: musharna/llm-panel@v0.1.6
+      - uses: musharna/llm-panel@main # pin to a tag once one carries action.yml
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
           # judges: or-glm,or-kimi,or-deepseek   timeout: "600"   extra-args: --rebut
 ```
 
-The default judges are the three OpenRouter ones, so one key is the whole setup. The
-job fails on exit 9 — the PR's tree carries `.opencode/` or claude hooks the judges would
+The default judges are the three OpenRouter ones, so one key is the whole setup. They
+read the checked-out tree, not just the diff: on this repository's own 9-file PR the three
+spent 480k–990k input tokens each and billed **$1.12 for the panel**, 4.5 minutes wall
+clock, with kimi-k3 four-fifths of the cost. The job fails on exit 9 — the PR's tree carries `.opencode/` or claude hooks the judges would
 run — and posts the panel on 0 or 4. This repository runs it on its own pull requests
 (`.github/workflows/panel.yml`, installing from source).
 
