@@ -243,7 +243,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: musharna/llm-panel@v0.1.6
+      - uses: musharna/llm-panel@v0.1.7
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
           # judges: or-glm,or-kimi,or-deepseek   timeout: "600"   extra-args: --rebut

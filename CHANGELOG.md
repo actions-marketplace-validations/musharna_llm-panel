@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 — 2026-09-06
 
+- `action.yml`: description under the GitHub Marketplace's 125-character cap, so the action
+  can be listed there.
 - **README rewritten for a first visitor**, from an independent critique: what the tool is
   for in one line, install and a one-judge first run at the top, the rebuttal screenshot as
   the hero, a cited table beside CodeRabbit, PR-Agent and Copilot code review, and the
