@@ -222,9 +222,10 @@ jobs:
 
 The default judges are the three OpenRouter ones, so one key is the whole setup. They
 read the checked-out tree, not just the diff: on this repository's own 9-file PR the three
-spent 480k–990k input tokens each and billed **$1.12 for the panel**, 4.5 minutes wall
-clock, with kimi-k3 four-fifths of the cost. The job fails on exit 9 — the PR's tree carries `.opencode/` or claude hooks the judges would
-run — and posts the panel on 0 or 4. This repository runs it on its own pull requests
+spent 300k–990k input tokens each and billed **$0.68 and $1.12 for the panel** on two
+runs, 4.5 minutes wall clock, with kimi-k3 the largest share both times. The job fails on
+exit 9 — the PR's tree carries `.opencode/` or claude hooks the judges would run — and
+posts the panel on 0 or 4. This repository runs it on its own pull requests
 (`.github/workflows/panel.yml`, installing from source).
 
 Judges reading through `codex`/`opencode`/`claude` can **read your repo**. `ollama` judges
