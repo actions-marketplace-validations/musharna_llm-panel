@@ -28,7 +28,6 @@ if sys.version_info < (3, 11):
 
 import argparse
 import hashlib
-import datetime as dt
 import html
 import json
 import os
@@ -1345,7 +1344,17 @@ a{{color:var(--accent);text-underline-offset:2px}}
 .rhead{{background:var(--sunk);border-bottom:1px solid var(--rule);padding:9px 15px;
  font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.13em;text-transform:uppercase;
  color:var(--ink-2);display:flex;justify-content:space-between;gap:10px}}
-.rbody{{padding:16px 18px 20px;max-height:620px;overflow-y:auto}}
+/* A review longer than the box scrolls inside it. With overlay scrollbars nothing said
+   so, and a review cut mid-sentence under a footer promising "reproduced in full" read
+   as truncation. Scroll shadows: the shadow at an edge shows only while there is more
+   content past it (background-attachment local/scroll trick, no JS). */
+.rbody{{padding:16px 18px 20px;max-height:620px;overflow-y:auto;scrollbar-width:thin}}
+/* `.more` is set by script while there is content below the fold: a fade with a label,
+   stuck to the bottom edge, that goes away at the end of the review. */
+.rbody.more::after{{content:"scrolls \\2193";position:sticky;bottom:-20px;display:block;
+ margin:0 -18px -20px;padding:30px 18px 7px;text-align:right;pointer-events:none;
+ font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+ color:var(--ink-3);background:linear-gradient(transparent,var(--surface) 62%)}}
 figure.shot{{margin:0 0 14px;padding:0}}
 figure.shot img{{max-width:100%;height:auto;display:block;border:1px solid var(--rule);border-radius:3px}}
 details.ask{{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:12px 15px}}
@@ -1414,12 +1423,16 @@ const J=JSON.parse(document.getElementById('jd').textContent);
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let sel=0;
 const tabs=document.getElementById('tabs');
+// A review taller than its box scrolls inside it; say so until the reader reaches the end.
+function more(b){{b.classList.toggle('more',b.scrollHeight-b.clientHeight-b.scrollTop>8);}}
+for(const b of document.querySelectorAll('.rbody'))b.addEventListener('scroll',()=>more(b));
 function paint(){{
   const j=J[sel];
   $('#r1').innerHTML=j.review||'<p class="empty">No round-one review was recorded.</p>';
   $('#r2').innerHTML=j.rebuttal||'<p class="empty">This judge did not take part in the rebuttal round.</p>';
   $('#m1').textContent=j.b1?j.b1.toLocaleString()+' B':'—';
   $('#m2').textContent=j.b2?j.b2.toLocaleString()+' B':'—';
+  for(const b of [$('#r1'),$('#r2')]){{b.scrollTop=0;more(b);}}
   tabs.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.i===sel));
 }}
 tabs.addEventListener('click',e=>{{const b=e.target.closest('button');if(!b)return;sel=+b.dataset.i;paint();}});
@@ -1597,7 +1610,7 @@ def build(run, opts):
             + (f'<td><div class="bar">{bar}</div><span class="mono" '
                f'style="font-size:.68rem;color:var(--ink-3)">{counts}</span></td></tr>'
                if tot else
-               '<td class="n" style="color:var(--reject)" title="this judge was asked to '
+               '<td class="n" style="color:var(--ink-3)" title="this judge was asked to '
                'rebut and produced no positions">no positions</td></tr>'
                if had_round else '<td class="n" style="color:var(--ink-3)">—</td></tr>'))
 

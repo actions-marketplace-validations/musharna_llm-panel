@@ -1,0 +1,144 @@
+name: "llm-panel review"
+description: >-
+  Put a pull request's diff to a panel of independent LLM judges and post every answer,
+  in full, as one PR comment. No consensus, no scoring: each judge's review verbatim.
+author: Jaret Arnold
+branding:
+  icon: users
+  color: gray-dark
+
+inputs:
+  openrouter-api-key:
+    description: >-
+      OpenRouter key the opencode judges authenticate with. The default judges all route
+      through OpenRouter; without the key every one of them reports `harness`.
+    required: true
+  judges:
+    description: Comma-separated judge names from the roster (`llm-panel --list`).
+    default: or-glm,or-kimi,or-deepseek
+  timeout:
+    description: Seconds each judge gets before it is killed and reported `harness`.
+    default: "600"
+  extra-args:
+    description: Anything else to pass to llm-panel, e.g. `--rebut` or `--effort high`.
+    default: ""
+  install:
+    description: >-
+      `pypi` installs the released package; `source` installs the checked-out tree, which
+      is what this repository's own workflow does.
+    default: pypi
+  github-token:
+    description: "Token used to post the comment. Needs `pull-requests: write`."
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: llm-panel's exit code (0 every judge answered, 4 degraded, 9 refused the tree).
+    value: ${{ steps.panel.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+    - uses: actions/setup-node@v7
+      with:
+        node-version: "22"
+
+    - name: Install llm-panel and opencode
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.install }}" = "source" ]; then
+          python -m pip install -q "$GITHUB_ACTION_PATH"
+        else
+          python -m pip install -q llm-panel
+        fi
+        npm install -g --silent opencode-ai
+        # The read-only `panelist` agent every opencode judge runs as. llm-panel refuses
+        # (exit 9) to run an opencode judge under an agent it cannot verify read-only.
+        mkdir -p ~/.config/opencode
+        if [ ! -f ~/.config/opencode/opencode.jsonc ]; then
+          python - <<'PY'
+        import pathlib, shutil, llm_panel
+        src = pathlib.Path(llm_panel.__file__).parent / "_scripts" / "opencode.jsonc"
+        shutil.copy(src, pathlib.Path.home() / ".config" / "opencode" / "opencode.jsonc")
+        PY
+        fi
+        llm-panel --version && opencode --version
+
+    - name: Build the prompt from the pull request diff
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+      run: |
+        set -euo pipefail
+        # A pull_request checkout is the MERGE commit at depth 1; neither the base nor
+        # the head sha is a local object until fetched by name.
+        git fetch -q --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
+        P="$RUNNER_TEMP/panel-prompt.md"
+        {
+          echo "Review this pull request: \"$PR_TITLE\". Report defects only, each with the"
+          echo "file and line it is in. If the change needs no comment at all, say so."
+          echo
+          echo '```diff'
+          git diff "$BASE_SHA" "$HEAD_SHA" | head -c 409600
+          echo '```'
+        } > "$P"
+        if [ "$(git diff "$BASE_SHA" "$HEAD_SHA" | wc -c)" -gt 409600 ]; then
+          echo "::warning::the diff was cut at 400 KB, the most a panel will read"
+          echo >> "$P"; echo "(The diff above was cut at 400 KB.)" >> "$P"
+        fi
+        echo "prompt=$P" >> "$GITHUB_OUTPUT"
+      id: prompt
+
+    - name: Run the panel
+      id: panel
+      shell: bash
+      env:
+        OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
+      run: |
+        set -uo pipefail
+        OUT="$RUNNER_TEMP/panel.md"
+        # Exit 4 (a judge never ran) still produced a panel worth posting; 9 means the
+        # tree under review carries opencode or claude configuration the judges would
+        # run, and that is a refusal worth failing the job on.
+        llm-panel -f "${{ steps.prompt.outputs.prompt }}" \
+          --judges "${{ inputs.judges }}" --timeout "${{ inputs.timeout }}" \
+          --cwd "$GITHUB_WORKSPACE" ${{ inputs.extra-args }} > "$OUT"
+        rc=$?
+        echo "exit-code=$rc" >> "$GITHUB_OUTPUT"
+        echo "panel=$OUT" >> "$GITHUB_OUTPUT"
+        case "$rc" in
+          0|4) exit 0 ;;
+          *) cat "$OUT"; exit "$rc" ;;
+        esac
+
+    - name: Post the panel as one comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        C="$RUNNER_TEMP/comment.md"
+        {
+          echo "<!-- llm-panel -->"
+          echo "## llm-panel: ${{ inputs.judges }} on \`${{ github.event.pull_request.head.sha }}\`"
+          echo
+          # The panel's "## Question" section is the prompt, i.e. the diff the pull
+          # request already shows; the comment carries the answers.
+          awk '/^## Question$/{skip=1; next} skip && /^---$/{skip=0} !skip' \
+            "${{ steps.panel.outputs.panel }}" > "$RUNNER_TEMP/answers.md"
+          head -c 60000 "$RUNNER_TEMP/answers.md"
+          if [ "$(wc -c < "$RUNNER_TEMP/answers.md")" -gt 60000 ]; then
+            echo; echo "_(cut at 60 KB; the full panel is in the job log)_"
+          fi
+        } > "$C"
+        cat "${{ steps.panel.outputs.panel }}"
+        # One comment per PR, edited on every push, rather than a new one each time.
+        gh pr comment "$PR" --body-file "$C" --edit-last --create-if-none

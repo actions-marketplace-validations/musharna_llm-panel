@@ -1375,7 +1375,7 @@ with section("quota.4 a limit maps onto the EXISTING unavailable status, not a n
     # wiring keeps a later tidy-up from inventing a parallel category that is not excluded.
     _src = SRC.read_text()
     check("quota.4 codex limit returns unavailable",
-          'return result(name, "unavailable",\n                                  f"codex usage limit' in _src
+          'return result(name, "unavailable",\n                                  "codex usage limit' in _src
           or 'note_limit(name, said, reset)' in _src, True)
     check("quota.4 unavailable is not counted as answered",
           'answered = [j for j in judges if results[j]["status"] in ("ok", "incomplete")]' in _src,
@@ -1667,9 +1667,12 @@ with section("23.2 --file that cannot be read is exit 2, not a traceback"):
 with section("23.3 an unwritable cache dir is a sentence, not a traceback"):
     _blk = _nd / "blocked"
     _blk.write_text("not a directory")
-    _env_blk = dict(_env23, XDG_CACHE_HOME=str(_blk), PATH="/usr/bin:/bin")
-    # codex is not on this PATH (one warning, not fatal) and is not an opencode judge, so
-    # the run reaches the run-directory write and fails THERE.
+    # A codex that exists but is never reached: with NO judge runnable the panel now
+    # refuses first (exit 14, control 27.1), so a stub keeps the gate open and the run
+    # reaches the run-directory write and fails THERE.
+    _bin23 = _nd / "bin"; _bin23.mkdir(exist_ok=True)
+    (_bin23 / "codex").write_text("#!/bin/sh\nexit 0\n"); (_bin23 / "codex").chmod(0o755)
+    _env_blk = dict(_env23, XDG_CACHE_HOME=str(_blk), PATH=f"{_bin23}:/usr/bin:/bin")
     _r = _run23(["--cwd", str(_nd / "repo"), "--judges", "codex", "hello"], _env_blk)
     check("exit 1", _r.returncode, 1)
     check("no traceback", "Traceback" in _r.stderr, False)
@@ -2168,6 +2171,42 @@ with section("26.10 --thread refuses an ephemeral cache instead of forgetting (f
           _p.returncode == 1 and "--thread" in _p.stderr and "XDG_CACHE_HOME" in _p.stderr, True)
     _p = _run26(["--judges", "codex", "q"], _r, home=_r, cache=_r / ".c")
     check("26.10 positive: the same setup without --thread still runs", _p.returncode, 0)
+
+
+# --- 27: first run on a machine that has none of the author's tools ---------------------
+with section("27.1 a panel no judge can run is refused with the setup in one sentence"):
+    # A fresh install with the shipped roster printed three "not on PATH" lines, ran a
+    # panel of three `harness` failures, and exited 4. The roster names one person's
+    # accounts; the first thing a new user needs is where to put their own, and that was
+    # nowhere in the output. Raised in the 2026-09-06 review of what a competitor's first
+    # run looks like.
+    _r = _repo26()
+    _bare = {"HOME": str(_d26), "XDG_CONFIG_HOME": str(_d26 / "cfg27"),
+             "XDG_CACHE_HOME": str(_d26 / "cache27"), "PATH": "/usr/bin:/bin"}
+    _p = _sp26.run([sys.executable, str(SRC), "q", "--cwd", str(_r)],
+                   capture_output=True, text=True, timeout=120, env=_bare)
+    check("27.1 exit 14", _p.returncode, 14)
+    check("27.1 names every missing binary", all(b in _p.stderr for b in ("codex", "opencode")), True)
+    check("27.1 says where the roster goes and how to ping it",
+          "roster.json" in _p.stderr and "--check" in _p.stderr, True)
+    check("27.1 and does not print the per-judge warnings on top",
+          "will report a transport failure" in _p.stderr, False)
+    _p = _sp26.run([sys.executable, str(SRC), "q", "--cwd", str(_r), "--judges", "local-small",
+                    "--timeout", "5"],
+                   capture_output=True, text=True, timeout=120,
+                   env=dict(_bare, OLLAMA_HOST="127.0.0.1:9"))   # a dead port, not the laptop's daemon
+    check("27.1 positive: a judge that needs no binary still runs (ollama is HTTP)",
+          _p.returncode != 14, True)
+    # Only codex on PATH: claude-opus is warned about and reported harness, codex answers,
+    # and the panel is degraded (exit 4) rather than refused.
+    _bin27 = _d26 / "bin27"; _bin27.mkdir(exist_ok=True)
+    (_bin27 / "codex").write_text((_bin26 / "codex").read_text()); (_bin27 / "codex").chmod(0o755)
+    _p = _sp26.run([sys.executable, str(SRC), "q", "--cwd", str(_r), "--judges", "codex,claude-opus"],
+                   capture_output=True, text=True, timeout=120,
+                   env=dict(_bare, PATH=f"{_bin27}:/usr/bin:/bin"))
+    check("27.1 positive: one runnable judge is enough, the other is warned about (exit 4: degraded)",
+          _p.returncode == 4 and "will report a transport failure" in _p.stderr
+          and "PONG" in _p.stdout, True)
 
 
 print(f"\nFAILED ({len(FAILED)} of {COUNT} failing)" if FAILED else f"\nall {COUNT} controls green")
