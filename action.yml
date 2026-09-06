@@ -76,7 +76,9 @@ runs:
         PR_TITLE: ${{ github.event.pull_request.title }}
       run: |
         set -euo pipefail
-        git fetch -q --no-tags --depth=1 origin "$BASE_SHA"
+        # A pull_request checkout is the MERGE commit at depth 1; neither the base nor
+        # the head sha is a local object until fetched by name.
+        git fetch -q --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
         P="$RUNNER_TEMP/panel-prompt.md"
         {
           echo "Review this pull request: \"$PR_TITLE\". Report defects only, each with the"
