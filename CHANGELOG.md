@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `action.yml`, from the panel's own review of PR #3 (or-kimi): the diff is written to a
+  file before it is cut, since `git diff | head -c` under `pipefail` failed the step with
+  SIGPIPE on exactly the oversized diffs the cut was for; and the comment step ends the
+  "## Question" strip at the first judge heading, not at a bare `---`, which a unified
+  diff prints for every removed line reading `--` and which then leaked the rest of the
+  prompt into the comment.
+- `panel-report`: a CSS comment described a background-attachment scroll-shadow trick that
+  was never shipped; the `.more` class set by script is the mechanism.
+
 ## 0.1.7 — 2026-09-06
 
 - `action.yml`: description under the GitHub Marketplace's 125-character cap, so the action

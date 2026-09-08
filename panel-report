@@ -1346,8 +1346,7 @@ a{{color:var(--accent);text-underline-offset:2px}}
  color:var(--ink-2);display:flex;justify-content:space-between;gap:10px}}
 /* A review longer than the box scrolls inside it. With overlay scrollbars nothing said
    so, and a review cut mid-sentence under a footer promising "reproduced in full" read
-   as truncation. Scroll shadows: the shadow at an edge shows only while there is more
-   content past it (background-attachment local/scroll trick, no JS). */
+   as truncation. */
 .rbody{{padding:16px 18px 20px;max-height:620px;overflow-y:auto;scrollbar-width:thin}}
 /* `.more` is set by script while there is content below the fold: a fade with a label,
    stuck to the bottom edge, that goes away at the end of the review. */

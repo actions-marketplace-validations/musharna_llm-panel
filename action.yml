@@ -79,15 +79,19 @@ runs:
         # the head sha is a local object until fetched by name.
         git fetch -q --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
         P="$RUNNER_TEMP/panel-prompt.md"
+        D="$RUNNER_TEMP/pull-request.diff"
+        # The diff goes to a file first: `git diff | head -c` under pipefail fails the
+        # step with SIGPIPE on exactly the oversized diffs the cut is for.
+        git diff "$BASE_SHA" "$HEAD_SHA" > "$D"
         {
           echo "Review this pull request: \"$PR_TITLE\". Report defects only, each with the"
           echo "file and line it is in. If the change needs no comment at all, say so."
           echo
           echo '```diff'
-          git diff "$BASE_SHA" "$HEAD_SHA" | head -c 409600
+          head -c 409600 "$D"
           echo '```'
         } > "$P"
-        if [ "$(git diff "$BASE_SHA" "$HEAD_SHA" | wc -c)" -gt 409600 ]; then
+        if [ "$(wc -c < "$D")" -gt 409600 ]; then
           echo "::warning::the diff was cut at 400 KB, the most a panel will read"
           echo >> "$P"; echo "(The diff above was cut at 400 KB.)" >> "$P"
         fi
@@ -130,8 +134,10 @@ runs:
           echo "## llm-panel: ${{ inputs.judges }} on \`${{ github.event.pull_request.head.sha }}\`"
           echo
           # The panel's "## Question" section is the prompt, i.e. the diff the pull
-          # request already shows; the comment carries the answers.
-          awk '/^## Question$/{skip=1; next} skip && /^---$/{skip=0} !skip' \
+          # request already shows; the comment carries the answers. The section ends at
+          # the first judge's "## " heading: a bare "---" would also end it, and a
+          # unified diff prints one for every removed line that reads "--".
+          awk '/^## Question$/{skip=1; next} skip && /^## /{skip=0} !skip' \
             "${{ steps.panel.outputs.panel }}" > "$RUNNER_TEMP/answers.md"
           head -c 60000 "$RUNNER_TEMP/answers.md"
           if [ "$(wc -c < "$RUNNER_TEMP/answers.md")" -gt 60000 ]; then
