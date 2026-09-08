@@ -16,7 +16,7 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
