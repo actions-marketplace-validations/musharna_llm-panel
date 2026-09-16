@@ -2672,7 +2672,7 @@ def thread_key(name, repo):
 # The codex judge spends plan quota, and the plan has two windows (5-hour, weekly) plus
 # "Full reset (Weekly + 5 hr)" credits that OpenAI banks on the account. None of that is on
 # `codex exec`'s stdout: it lives behind the app-server's JSON-RPC (`account/rateLimits/read`
-# and `.../resetCredit/consume`), which is what the interactive `/status` screen reads. So
+# and `account/rateLimitResetCredit/consume`), which is what the interactive `/status` screen reads. So
 # --usage asks the same thing the TUI does, and --reset-usage redeems one credit -- behind
 # the typed word RESET, because a credit is finite and a script must not be able to burn
 # one by passing a flag.
@@ -2799,7 +2799,9 @@ def run_reset_usage():
     if typed != "RESET":
         die("not redeemed (confirmation was not the word RESET)")
     key = str(__import__("uuid").uuid4())
-    out = codex_rpc([("account/rateLimits/resetCredit/consume", {"idempotencyKey": key}),
+    # codex renamed this method (was `account/rateLimits/resetCredit/consume`; the
+    # app-server now rejects that as an unknown variant and lists the new name).
+    out = codex_rpc([("account/rateLimitResetCredit/consume", {"idempotencyKey": key}),
                      ("account/rateLimits/read", {})])
     outcome = (out.get(0) or {}).get("outcome")
     print(f"\noutcome: {outcome}\n")

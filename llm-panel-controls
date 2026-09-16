@@ -1735,7 +1735,13 @@ with section("23.8 the rest, by source"):
 # --- 24. --usage / --reset-usage: the ChatGPT plan's windows and banked resets ----------
 #
 # Codex banks "Full reset (Weekly + 5 hr)" credits on the account and exposes them only
-# through its app-server (`account/rateLimits/read`, `account/rateLimits/resetCredit/consume`).
+# through its app-server (`account/rateLimits/read`, `account/rateLimitResetCredit/consume`).
+# That second name is codex's SECOND: it was `account/rateLimits/resetCredit/consume` until
+# codex renamed it, after which the app-server rejected the old spelling as an unknown
+# variant and `--reset-usage` could not redeem a credit at all. The fake below answers the
+# new name and, like the real app-server, returns -32601 for anything else -- so a build
+# still sending the old name fails this section rather than passing on a stub that would
+# answer to either.
 # A credit is finite, so redeeming one has to be an explicit act: `--reset-usage` reads the
 # word RESET from stdin and sends nothing otherwise. The fake `codex` below speaks the same
 # JSON-RPC over stdio and LOGS every method it was sent, so the negative control can assert
@@ -1771,7 +1777,7 @@ for line in sys.stdin:
         res = {{"rateLimits": rl, "rateLimitResetCredits": {{"availableCount": credits, "credits": [
             {{"id": "RateLimitResetCredit_abc", "resetType": "codexRateLimits", "status": "available",
               "grantedAt": 1787353263, "expiresAt": 1789945263, "title": "Full reset (Weekly + 5 hr)"}}] * credits}}}}
-    elif m == "account/rateLimits/resetCredit/consume":
+    elif m == "account/rateLimitResetCredit/consume":
         assert req["params"]["idempotencyKey"], req
         res = {{"outcome": outcome}}
     else:
@@ -1814,7 +1820,7 @@ with section("24.2 --reset-usage without the word RESET on stdin consumes nothin
         check(f"stdin {_typed!r}: exit 1", _r.returncode, 1)
         check(f"stdin {_typed!r}: says nothing was redeemed", "not redeemed" in _r.stderr, True)
         check(f"stdin {_typed!r}: no consume request was sent",
-              "account/rateLimits/resetCredit/consume" in _methods24(), False)
+              "account/rateLimitResetCredit/consume" in _methods24(), False)
     check("the prompt names what is being spent",
           "Full reset (Weekly + 5 hr)" in _r.stdout and "RESET" in _r.stdout, True)
 
@@ -1823,9 +1829,9 @@ with section("24.3 --reset-usage with RESET on stdin redeems one credit and re-r
     check("exit 0", _r.returncode, 0)
     check("the outcome is reported in the provider's word", "reset" in _r.stdout.lower(), True)
     _m = _methods24()
-    check("exactly one consume request", _m.count("account/rateLimits/resetCredit/consume"), 1)
+    check("exactly one consume request", _m.count("account/rateLimitResetCredit/consume"), 1)
     check("the windows are read again AFTER the consume so the user sees the new state",
-          _m.index("account/rateLimits/resetCredit/consume") < len(_m) - 1
+          _m.index("account/rateLimitResetCredit/consume") < len(_m) - 1
           and _m[-1] == "account/rateLimits/read", True)
 
 with section("24.4 the backend's other outcomes are surfaced, not flattened to success"):
@@ -1833,7 +1839,7 @@ with section("24.4 the backend's other outcomes are surfaced, not flattened to s
     check("no credit: exit 1", _r.returncode, 1)
     check("no credit: says so", "no" in _r.stderr.lower() and "credit" in _r.stderr.lower(), True)
     check("no credit: never asked for confirmation on an empty bank",
-          "account/rateLimits/resetCredit/consume" in _methods24(), False)
+          "account/rateLimitResetCredit/consume" in _methods24(), False)
     _r = _run24(["--reset-usage"], stdin_text="RESET\n", FAKE_OUTCOME="nothingToReset")
     check("nothing to reset: exit 1", _r.returncode, 1)
     check("nothing to reset: the sentence", "nothing to reset" in _r.stderr, True)
