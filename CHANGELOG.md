@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 — 2026-09-15
 
+- `--reset-usage` could not redeem a banked reset credit at all. codex renamed the
+  app-server's redeem call from `account/rateLimits/resetCredit/consume` to
+  `account/rateLimitResetCredit/consume`, and the app-server rejects the old spelling as an
+  unknown variant — so the flag read the bank, asked for the typed word RESET, and then
+  sent a method the provider no longer knows. Control 24's fake app-server answered the old
+  name too, which is why the source fix sat uncommitted until both halves could land: it
+  now answers the new name only, so a build that reverts fails 24.3 instead of passing
+  against a stub that would answer to either. Not exercised against the live app-server —
+  redeeming is not undoable and the bank is finite.
 - `action.yml`, from the panel's own review of PR #3 (or-kimi): the diff is written to a
   file before it is cut, since `git diff | head -c` under `pipefail` failed the step with
   SIGPIPE on exactly the oversized diffs the cut was for; and the comment step ends the
